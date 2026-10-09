@@ -1,0 +1,260 @@
+/* On-screen touch controls — shown only during a live fight on touch devices (see src/core/touch.ts). */
+
+body.touch #app {
+  touch-action: none;
+  -webkit-touch-callout: none;
+}
+
+.tc {
+  --s: 1;
+  position: absolute;
+  inset: 0;
+  z-index: 1; /* above the canvas/scanlines, below the HUD + pause/result overlays (.ui is z-index 2) */
+  pointer-events: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  font-family: var(--display);
+}
+
+/* ---- left-thumb floating joystick ---- */
+
+.tc-zone {
+  position: absolute;
+  left: 0;
+  top: 110px;
+  bottom: 0;
+  width: 42%;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.tc-stick {
+  --size: calc(128px * var(--s));
+  position: absolute;
+  /* resting spot (faded) until a thumb lands — then it jumps under the thumb */
+  left: calc(env(safe-area-inset-left) + 122px * var(--s));
+  top: calc(100% - env(safe-area-inset-bottom) - 112px * var(--s));
+  width: var(--size);
+  height: var(--size);
+  margin: calc(var(--size) / -2) 0 0 calc(var(--size) / -2);
+  border-radius: 50%;
+  border: 2px solid rgba(47, 224, 255, 0.45);
+  background: radial-gradient(circle, rgba(10, 16, 48, 0.15) 0%, rgba(10, 16, 48, 0.45) 70%);
+  box-shadow: inset 0 0 18px rgba(47, 224, 255, 0.18);
+  opacity: 0.45;
+  transition: opacity 0.12s;
+  pointer-events: none;
+}
+
+.tc-stick::before,
+.tc-stick::after {
+  /* cross-hair ticks */
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: rgba(47, 224, 255, 0.35);
+}
+
+.tc-stick::before {
+  width: 70%;
+  height: 2px;
+  transform: translate(-50%, -50%);
+}
+
+.tc-stick::after {
+  width: 2px;
+  height: 70%;
+  transform: translate(-50%, -50%);
+}
+
+.tc-stick.on {
+  opacity: 1;
+  transition: none;
+}
+
+.tc-knob {
+  --k: calc(58px * var(--s));
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--k);
+  height: var(--k);
+  margin: calc(var(--k) / -2) 0 0 calc(var(--k) / -2);
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #e8fbff 0%, #6fe6ff 35%, #1b7fb8 100%);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow:
+    0 0 14px rgba(47, 224, 255, 0.55),
+    0 3px 0 rgba(0, 0, 0, 0.45);
+  z-index: 1;
+  will-change: transform;
+}
+
+/* ---- right-thumb button arc ---- */
+
+.tc-btn {
+  --x: 0;
+  --y: 0;
+  --d: 64;
+  position: absolute;
+  width: calc(var(--d) * var(--s) * 1px);
+  height: calc(var(--d) * var(--s) * 1px);
+  right: calc(env(safe-area-inset-right) + (var(--x) - var(--d) / 2) * var(--s) * 1px);
+  bottom: calc(env(safe-area-inset-bottom) + (var(--y) - var(--d) / 2) * var(--s) * 1px);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: calc(15px * var(--s));
+  font-style: italic;
+  letter-spacing: 1px;
+  color: #fff;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.7);
+  background: radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.22) 0%, rgba(10, 16, 48, 0.55) 70%);
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  box-shadow:
+    inset 0 0 12px rgba(47, 224, 255, 0.25),
+    0 3px 0 rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  touch-action: none;
+  transition:
+    transform 0.06s,
+    background-color 0.06s;
+}
+
+.tc-btn.on {
+  transform: scale(0.9);
+  background: radial-gradient(circle at 50% 40%, rgba(255, 255, 255, 0.85) 0%, rgba(47, 224, 255, 0.75) 45%, rgba(10, 60, 120, 0.8) 100%);
+  border-color: #fff;
+  box-shadow: 0 0 18px rgba(47, 224, 255, 0.85);
+  transition: none;
+}
+
+/* primary trigger: yellow, like the arcade stick's trigger */
+.tc-rw {
+  font-size: calc(22px * var(--s));
+  border-color: rgba(255, 210, 26, 0.9);
+  background: radial-gradient(circle at 50% 35%, rgba(255, 240, 160, 0.35) 0%, rgba(120, 70, 0, 0.55) 72%);
+  box-shadow:
+    inset 0 0 14px rgba(255, 210, 26, 0.35),
+    0 3px 0 rgba(0, 0, 0, 0.35);
+}
+
+.tc-rw.on {
+  background: radial-gradient(circle at 50% 40%, #fffbe0 0%, #ffd21a 45%, #c06a00 100%);
+  box-shadow: 0 0 22px rgba(255, 210, 26, 0.9);
+}
+
+.tc-lw {
+  border-color: rgba(255, 138, 28, 0.85);
+}
+
+.tc-cw {
+  border-color: rgba(255, 90, 160, 0.85);
+}
+
+.tc-cw.on {
+  background: radial-gradient(circle at 50% 40%, #fff 0%, #ff7ac0 45%, #8a1050 100%);
+  box-shadow: 0 0 18px rgba(255, 90, 160, 0.85);
+}
+
+.tc-jump,
+.tc-dash {
+  font-size: calc(13px * var(--s));
+  border-color: rgba(47, 224, 255, 0.75);
+}
+
+.tc-guard {
+  font-size: calc(11px * var(--s));
+  opacity: 0.85;
+}
+
+.tc-pause {
+  position: absolute;
+  left: calc(env(safe-area-inset-left) + 22px);
+  top: 112px;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  background: rgba(10, 16, 48, 0.5);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.tc-pause i {
+  display: block;
+  width: 5px;
+  height: 16px;
+  background: #fff;
+  border-radius: 1px;
+}
+
+/* ---- HUD tweaks while the touch controls are up (thumbs own both bottom corners) ---- */
+
+body.touch-battle .gauges {
+  bottom: auto;
+  top: 98px;
+  transform: translateX(-50%) scale(0.6);
+  transform-origin: top center;
+}
+
+body.touch-battle .controls-hint {
+  display: none;
+}
+
+body.touch-battle .status {
+  top: 140px;
+}
+
+/* ---- portrait: ask for landscape ---- */
+
+.tc-rotate {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  background: #0a1030;
+  color: #fff;
+  font-family: var(--display);
+  font-size: 20px;
+  letter-spacing: 5px;
+  text-align: center;
+  padding: 24px;
+}
+
+.tc-phone {
+  width: 56px;
+  height: 96px;
+  border: 4px solid var(--cyan);
+  border-radius: 10px;
+  box-shadow: 0 0 18px rgba(47, 224, 255, 0.5);
+  animation: tc-turn 2.2s ease-in-out infinite;
+}
+
+@keyframes tc-turn {
+  0%,
+  25% {
+    transform: rotate(0deg);
+  }
+  60%,
+  100% {
+    transform: rotate(-90deg);
+  }
+}
+
+@media (orientation: portrait) {
+  body.touch .tc-rotate {
+    display: flex;
+  }
+}
