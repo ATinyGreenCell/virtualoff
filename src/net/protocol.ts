@@ -2,13 +2,14 @@ import type { ControlFrame } from '../core/input';
 import type { MechId, StageId } from '../game/specs';
 
 /** Bump whenever messages change shape; peers with different versions refuse to play. */
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 export const APP_ID = 'virtual-off/versus/v1';
 
 export type Role = 'host' | 'guest';
 
 export type LobbyMsg =
-  | { t: 'hello'; v: number; role: Role }
+  /** `ack` marks a reply, which is never answered (so two hellos can't ping-pong) */
+  | { t: 'hello'; v: number; role: Role; ack?: 1 }
   | { t: 'full' }
   | { t: 'pick'; mech: MechId; ready: boolean }
   | { t: 'start'; mech0: MechId; mech1: MechId; stage: StageId }
@@ -69,6 +70,9 @@ export type ProjSnap = number[];
 export type BeamSnap = number[];
 /** First element names the event; the rest are its arguments. */
 export type NetEvent = (string | number)[];
+
+/** One-shot events of a snapshot sent over the real-time channel; these travel reliably on their own. */
+export type EventsMsg = { ht: number; e: NetEvent[] };
 
 // a type alias (not an interface) so it satisfies Trystero's JSON payload constraint
 export type SnapMsg = {

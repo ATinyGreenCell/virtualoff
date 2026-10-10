@@ -7,6 +7,10 @@ import { App } from './app';
 import { audio } from './audio/audio';
 import { TouchControls } from './core/touch';
 import { Flow } from './flow';
+import { preloadNet } from './net/link';
+
+// an invite link means versus is coming: fetch the networking code while the rest boots
+if (/(?:^|[#&])vs=/.test(location.hash)) void preloadNet().catch(() => undefined);
 
 // iOS/Safari only let an AudioContext start or resume inside the gesture handler itself, and may
 // suspend it again after the app is backgrounded — so keep these installed (unlock() is idempotent).

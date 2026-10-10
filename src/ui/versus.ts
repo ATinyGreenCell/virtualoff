@@ -3,7 +3,7 @@ import type { App, Screen } from '../app';
 import type { Flow } from '../flow';
 import { MechModel, makePose } from '../game/mechModel';
 import { FUJIN, JEBE, type MechId, type MechSpec, type StageId } from '../game/specs';
-import { NetLink, type LinkStatus } from '../net/link';
+import { NetLink, preloadNet, type LinkStatus } from '../net/link';
 import { isValidCode, makeRoomCode, normalizeCode, type LobbyMsg } from '../net/protocol';
 import { Hangar } from './screens';
 
@@ -64,6 +64,8 @@ export class VersusScreen implements Screen {
     });
     app.ui.appendChild(this.el);
     audio.playMusic('select');
+    // the player is heading for a link battle: have the networking code ready before they pick
+    void preloadNet().catch(() => undefined);
     if (opts.link?.connected) {
       this.adopt(opts.link);
       this.go('pick');
@@ -296,6 +298,11 @@ export class VersusScreen implements Screen {
       this.dropLink();
       audio.play('uiBack');
       this.go('error');
+    } else if (s === 'reconnecting') {
+      // hold the lobby: Trystero re-pairs us if the rival is still around
+      this.starting = false;
+      const ping = this.panel.querySelector('.vs-ping');
+      if (ping) ping.textContent = 'LINK LOST — RECONNECTING…';
     } else if (this.state === 'host') {
       const t = this.panel.querySelector('.vs-status-text');
       if (t && s === 'waiting') t.textContent = 'WAITING FOR YOUR RIVAL…';
@@ -384,7 +391,7 @@ export class VersusScreen implements Screen {
         if (ping && this.link.rtt) ping.textContent = `LINK ${Math.round(this.link.rtt)} ms`;
       }
     }
-    if (this.starting && this.link?.role === 'host') {
+    if (this.starting && this.link?.role === 'host' && this.link.connected) {
       this.startT += dt;
       if (!(this.myReady && this.rivalReady)) this.starting = false;
       else if (this.startT > 0.9 && this.rivalPick) {

@@ -101,6 +101,8 @@ export class Battle implements Screen {
   private wantRematch = false;
   private rivalRematch = false;
   private rivalGone = false;
+  /** versus: the link dropped and is trying to come back — the match is frozen meanwhile */
+  private reconnectEl: HTMLDivElement | null = null;
   /** host: what the guest is pressing */
   private remoteMsg: InputMsg | null = null;
   private remoteEdges = 0;
@@ -221,7 +223,11 @@ export class Battle implements Screen {
 
   update(dt: number) {
     if (this.finished) return;
-    this.app.touch?.setBattleActive(this.phase === 'fight' && !this.paused && !this.leaveEl);
+    this.app.touch?.setBattleActive(this.phase === 'fight' && !this.paused && !this.leaveEl && !this.reconnectEl);
+    if (this.reconnectEl) {
+      this.updateReconnect();
+      return;
+    }
     if (this.mode === 'guest') {
       this.guestUpdate(dt);
       return;
@@ -439,6 +445,8 @@ export class Battle implements Screen {
   private attachNet(link: NetLink) {
     const onStatus = (st: string) => {
       if (st === 'lost' || st === 'error') this.rivalLeft('CONNECTION LOST');
+      else if (st === 'reconnecting') this.setReconnecting(true);
+      else if (st === 'connected') this.setReconnecting(false);
     };
     const onLobby = (m: { t: string }) => {
       if (m.t === 'bye') this.rivalLeft('YOUR RIVAL LEFT');
@@ -461,8 +469,45 @@ export class Battle implements Screen {
         },
       });
     } else {
-      link.attach(this, { onStatus, onLobby, onSnap: (m) => this.receiveSnap(m) });
+      link.attach(this, {
+        onStatus,
+        onLobby,
+        onSnap: (m) => this.receiveSnap(m),
+        // one-shot events of fast-channel snapshots arrive separately (and reliably), in order
+        onEvents: (m) => {
+          for (const e of m.e) this.pending.push({ ht: m.ht, e });
+        },
+      });
     }
+  }
+
+  /** Freeze the match while the link tries to come back (both sides), and resume where it stopped. */
+  private setReconnecting(on: boolean) {
+    if (on === !!this.reconnectEl || this.finished) return;
+    if (on) {
+      if (this.rivalGone) return;
+      const el = document.createElement('div');
+      el.className = 'overlay pause reconnect';
+      el.innerHTML = `<div class="ov-title small">CONNECTION LOST</div><div class="ov-hint">reconnecting… <b class="rc-left"></b><br>the match resumes on its own · pause to leave</div>`;
+      this.app.ui.appendChild(el);
+      this.reconnectEl = el;
+      this.updateReconnect();
+    } else {
+      this.reconnectEl?.remove();
+      this.reconnectEl = null;
+      // the gap would otherwise read as jitter and inflate the guest's buffering
+      this.lastArrival = 0;
+      this.app.input.flush();
+      audio.play('lockOn');
+    }
+  }
+
+  private updateReconnect() {
+    const left = Math.max(0, Math.ceil(((this.net?.reconnectDeadline ?? 0) - performance.now()) / 1000));
+    const t = this.reconnectEl?.querySelector('.rc-left');
+    if (t) t.textContent = `${left}`;
+    if (this.leaveEl) this.updateLeave();
+    else if (this.app.input.menu.pause) this.openLeave();
   }
 
   private takeRemoteInput(): ControlFrame {
@@ -518,8 +563,9 @@ export class Battle implements Screen {
     const msg = packInput(this.inputSeq + 1, c, edges);
     const key = `${msg[1]},${msg[2]},${msg[3]},${msg[4]}`;
     const now = performance.now();
-    // send on any change or press, plus a 10 Hz heartbeat so the host knows we're still here
-    if (edges || key !== this.lastInputKey || now - this.lastInputAt > 100) {
+    // send on any change or press, plus a 20 Hz heartbeat: it tells the host we're here, and on the
+    // lossy fast channel it re-delivers (with the last few inputs) anything a dropped packet carried
+    if (edges || key !== this.lastInputKey || now - this.lastInputAt > 50) {
       this.inputSeq++;
       this.net.sendInput(msg);
       this.lastInputKey = key;
@@ -599,6 +645,8 @@ export class Battle implements Screen {
   private rivalLeft(title: string) {
     if (this.rivalGone || this.finished) return;
     this.rivalGone = true;
+    this.reconnectEl?.remove();
+    this.reconnectEl = null;
     this.leaveEl?.remove();
     this.leaveEl = null;
     this.resultEl?.remove();

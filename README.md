@@ -38,6 +38,11 @@ types the code. Both choose a VR, hit **READY**, and fight best-of-three; **REMA
   if a pairing won't connect, joining the same Wi-Fi (or a phone hotspot) fixes it.
 - The host's device runs the fight and streams it ~60×/s; the guest's device sends its inputs and draws
   the host's snapshots with a short interpolation buffer, so both screens always agree on every hit.
+  State and inputs travel on an unordered, no-retransmit channel (a lost packet never stalls the ones
+  behind it; inputs repeat the last few presses so none get lost), while one-shot events — hits,
+  announcer calls — go on the reliable channel.
+- If the link drops mid-match (Wi-Fi blip, switching apps), both screens freeze with a countdown and the
+  match picks up where it stopped as soon as the devices re-pair — up to 20 seconds.
 
 ## Controls
 
@@ -92,6 +97,8 @@ Weapon gauges recharge independently.
   landings — it uses the exact same control frame as the player.
 - Hardened for real-world use: GPU context loss recovery, auto-pause when the tab is hidden, focus is
   lost or a gamepad unplugs, crash-loop recovery back to the title, and reduced-motion support.
+- Fast return visits: the synthesized sound library is cached in IndexedDB after the first visit (keyed
+  to a hash of the audio code), and three.js ships as its own long-lived file.
 
 ## Code map
 

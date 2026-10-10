@@ -1,8 +1,10 @@
 /**
  * Renders the whole sound library (instruments, effects, loops) once, offline and in the
- * background, as soon as the game boots — no user gesture needed for offline rendering.
+ * background, as soon as the game boots — no user gesture needed for offline rendering. Return
+ * visits restore the finished library from IndexedDB instead (cache.ts).
  */
-import { calibrate, canRender, clearImpulseCache, makeLoop, mtof, render, trim } from './dsp';
+import { cacheEnabled, readCache, writeCache } from './cache';
+import { calibrate, canRender, clearImpulseCache, makeLoop, mtof, render, SR, trim } from './dsp';
 import { SAMPLES } from './samples';
 import type { SampleBuf } from './sequencer';
 import { LOOPS, SFX, type LoopDef, type SfxDef } from './sfx';
@@ -36,6 +38,10 @@ export class Library {
   private async run() {
     if (!canRender()) return;
     const t0 = performance.now();
+    if (cacheEnabled() && (await this.restore())) {
+      if (import.meta.env.DEV) console.info(`[audio] library restored in ${Math.round(performance.now() - t0)} ms`);
+      return;
+    }
     const sfxJob = (name: SfxName) => async () => {
       const def = SFX[name];
       const buf = trim(await render(def.seconds, def.stereo ? 2 : 1, (ctx, out) => def.build(ctx, out)));
@@ -70,9 +76,47 @@ export class Library {
       this.done = true;
       clearImpulseCache();
       if (import.meta.env.DEV) console.info(`[audio] library rendered in ${Math.round(performance.now() - t0)} ms`);
+      if (cacheEnabled()) this.saveWhenIdle();
     } catch (err) {
       console.warn('[audio] could not render the sound library', err);
     }
+  }
+
+  /** Cache keys for every buffer the library holds. */
+  private keys() {
+    return [
+      ...Object.keys(SAMPLES).map((id) => `sample:${id}`),
+      ...Object.keys(SFX).map((n) => `sfx:${n}`),
+      ...Object.keys(LOOPS).map((n) => `loop:${n}`),
+    ];
+  }
+
+  /** Fill the library from the cache; false (and nothing filled) when it can't be used. */
+  private async restore() {
+    const got = await readCache(__SOUND_VERSION__, this.keys(), SR);
+    if (!got) return false;
+    for (const [id, def] of Object.entries(SAMPLES)) this.samples.set(id, { buffer: got.get(`sample:${id}`)!, root: def.root, drum: DRUMS.has(id) });
+    for (const [name, def] of Object.entries(SFX) as [SfxName, SfxDef][]) this.sfx.set(name, { buffer: got.get(`sfx:${name}`)!, def });
+    for (const [name, def] of Object.entries(LOOPS) as [LoopName, LoopDef][]) this.loops.set(name, { buffer: got.get(`loop:${name}`)!, def });
+    this.musicReady = true;
+    for (const fn of this.listeners.splice(0)) fn();
+    this.done = true;
+    return true;
+  }
+
+  /** Store the finished library once the page is idle, so it never competes with play. */
+  private saveWhenIdle() {
+    // only a complete library is worth keeping
+    if (this.samples.size + this.sfx.size + this.loops.size !== this.keys().length) return;
+    const entries: [string, AudioBuffer][] = [
+      ...[...this.samples].map(([id, s]) => [`sample:${id}`, s.buffer] as [string, AudioBuffer]),
+      ...[...this.sfx].map(([n, s]) => [`sfx:${n}`, s.buffer] as [string, AudioBuffer]),
+      ...[...this.loops].map(([n, s]) => [`loop:${n}`, s.buffer] as [string, AudioBuffer]),
+    ];
+    const save = () => void writeCache(__SOUND_VERSION__, entries);
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number };
+    if (w.requestIdleCallback) w.requestIdleCallback(save, { timeout: 8000 });
+    else setTimeout(save, 3000);
   }
 
   /** Run async jobs with bounded concurrency; resolves with the jobs that failed. */
