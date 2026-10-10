@@ -44,7 +44,7 @@ async function boot() {
     flow.title();
   }
   app.start();
-  if (import.meta.env.DEV) Object.assign(window, { __vo: { app, flow } });
+  if (import.meta.env.DEV) Object.assign(window, { __vo: { app, flow, audio } });
 }
 
 void boot();

@@ -106,6 +106,10 @@ export class Input {
   /** a touch/pen tap since the last update — counts as "any button" for PRESS START, never as a weapon */
   private touchTap = false;
   private padIndex = -1;
+  /** identity of the pad the axis mask below was taken from */
+  private padKey = '';
+  /** axes that rested far from center when a non-standard pad appeared (triggers reported as axes) */
+  private padDeadAxes: boolean[] = [];
   private padPrev: boolean[] = [];
   private stickPrev = { x: 0, y: 0 };
   private sinceL = 9;
@@ -155,6 +159,7 @@ export class Input {
     window.addEventListener('gamepaddisconnected', (e) => {
       if (e.gamepad.index !== this.padIndex) return;
       this.padIndex = -1;
+      this.padKey = '';
       this.padPrev.length = 0;
       if (this.lastDevice === 'pad') {
         this.lastDevice = 'keyboard';
@@ -216,9 +221,17 @@ export class Input {
     const pad = this.pollPad();
     this.padConnected = !!pad;
     if (pad) {
+      const key = `${pad.index}:${pad.id}`;
+      if (key !== this.padKey) {
+        this.padKey = key;
+        // Non-standard mappings can expose analog triggers as axes resting at -1. A stick never rests
+        // there, so mask those axes rather than let the mech spin on its own.
+        this.padDeadAxes = pad.mapping === 'standard' ? [] : pad.axes.map((a) => Math.abs(a) > 0.5);
+      }
       const b = (i: number) => !!pad.buttons[i]?.pressed;
       const bp = (i: number) => b(i) && !this.padPrev[i];
-      const ax = (i: number) => deadzone(pad.axes[i] ?? 0);
+      const raw = (i: number) => (this.padDeadAxes[i] ? 0 : (pad.axes[i] ?? 0));
+      const ax = (i: number) => deadzone(raw(i));
       let padAny = false;
       for (let i = 0; i < pad.buttons.length; i++) if (bp(i)) padAny = true;
 
@@ -258,8 +271,8 @@ export class Input {
       }
 
       // menu navigation from d-pad and left stick edges
-      const sx = pad.axes[0] ?? 0;
-      const sy = pad.axes[1] ?? 0;
+      const sx = raw(0);
+      const sy = raw(1);
       const T = 0.6;
       m.up ||= bp(12) || (sy < -T && this.stickPrev.y >= -T);
       m.down ||= bp(13) || (sy > T && this.stickPrev.y <= T);

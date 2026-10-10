@@ -109,6 +109,7 @@ src/
     arena.ts       stages, static batching, collision, occluding-block fading
     battle.ts      round flow, HUD, cameras — vs CPU, versus host and versus guest
   net/         room codes, wire protocol, WebRTC link (Trystero)
-  audio/       WebAudio synth: sfx, music sequencer, original tracks
+  audio/       WebAudio engine: instruments and sfx synthesized once offline at boot, then played as
+               samples — song sequencer (chords, sidechain pump, echo), master bus, original tracks
   ui/          HUD, title / select / ending screens, versus lobby
 ```
