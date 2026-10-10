@@ -17,7 +17,30 @@ npm install
 npm run dev        # http://localhost:5173
 npm run build      # typecheck + production build into dist/
 npm run preview    # serve the production build
+npm run test:e2e   # end-to-end browser suite (see Tests)
 ```
+
+## Tests
+
+`npm run test:e2e` runs 14 browser tests against a dev server it starts itself, 8 at a time — about
+80 seconds:
+
+- arcade flow (stages, continues, game over)
+- CPU vs CPU
+- movement physics and edge cases
+- melee
+- touch controls on an emulated phone
+- audio engine stress
+- crash/context-loss hardening
+- two-device versus, including 30 % packet loss and dropped-link recovery
+
+Dev-only URL switches keep it quick: `?fast` speeds up non-gameplay waits, `?noaudio` skips building
+the sound library, and `?grace=N` shortens the versus reconnect window. Production builds strip
+these out.
+
+The suite needs Chrome (`CHROME_PATH` to point elsewhere), and the versus tests need internet access
+because they pair through public Nostr relays. Logs and screenshots go to `tests/e2e/.out/`. Run
+part of it with `npm run test:e2e -- --only versus,touch`.
 
 ## Deploy to GitHub Pages
 
@@ -50,8 +73,8 @@ types the code. Both choose a VR, hit **READY**, and fight best-of-three; **REMA
 | --- | --- |
 | `W A S D` | walk / strafe (your VR auto-faces the enemy) |
 | `Q` `E` (or `←` `→`) | quick turn |
-| `Space` | jump |
-| `Shift` + direction | dash (hold to extend; in the air = air dash) |
+| `Space` | jump — hold to keep climbing on thrusters (EN) |
+| `Shift` + direction | tap: **quick boost** burst (EN) · hold: **boost** glide (free on the ground, EN in the air) |
 | `J` / `L` | left weapon (LW) / right weapon (RW) |
 | `K` or `J`+`L` together | center weapon (CW) |
 | `C` | guard |
@@ -60,7 +83,7 @@ types the code. Both choose a VR, hit **READY**, and fight best-of-three; **REMA
 | `` ` `` | FPS / performance meter |
 
 **Touch:** on phones and tablets an on-screen arcade layout appears — floating stick on the left, LW /
-RW / CW / JUMP / DASH / GUARD on the right, pause at the top. Play in landscape.
+RW / CW / JUMP / BOOST / GUARD on the right, pause at the top. Play in landscape.
 
 **Gamepad — Modern:** left stick move, right stick turn, A jump, B/LB/RB dash, LT/RT = LW/RW
 (both = CW), Y = CW, X = guard.
@@ -69,13 +92,19 @@ RW / CW / JUMP / DASH / GUARD on the right, pause at the top. Play in landscape.
 walk, opposite directions to turn, pull apart to jump, push together to guard. LB/RB are the turbo
 buttons (dash), LT/RT the triggers.
 
+**Movement carries momentum.** Tap BOOST for a quick-boost burst (chain them to zig-zag), hold it to glide
+at high speed and steer — at speed you carve arcs rather than snapping round. Jump out of a boost and the
+whole speed goes up with you; hold JUMP to climb, hold BOOST in the air to hover-glide, and you land
+without losing pace (only a long fall crouches you for a beat). Quick boosts, climbing and air boosting
+spend **EN** (the bar above the weapon gauges); run it dry and it locks out until it recovers.
+
 Shooting doesn't stop you: **walking shots** keep you moving at nearly full speed, while **planted
 shots** (standing still) home in better. Heavy center-weapon shots plant your feet, but whatever momentum
-you had slides out, as do dash endings and landings. Shots fire on the press; hit the second trigger
+you had slides out. Shots fire on the press; hit the second trigger
 right after the first to turn it into the center weapon. Jump/dash/fire pressed during a shot's recovery
 is buffered and comes out right after it.
 
-Fire near the enemy for a melee attack. Shots change while dashing or airborne (spread shots, dropped
+Fire near the enemy for a melee attack. Shots change while boosting or airborne (spread shots, dropped
 bombs, air shots that keep your jump arc). Big hits knock you down — you're invincible while getting up.
 Weapon gauges recharge independently.
 

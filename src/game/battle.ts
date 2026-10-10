@@ -4,6 +4,7 @@ import type { App, Screen } from '../app';
 import { makeControls, type ControlFrame } from '../core/input';
 import { clamp } from '../core/math';
 import { reducedMotion, type Difficulty } from '../core/settings';
+import { ceremony } from '../core/testmode';
 import type { NetLink } from '../net/link';
 import {
   EDGE_MASK,
@@ -250,7 +251,7 @@ export class Battle implements Screen {
       this.world.hitStopT -= dt;
       sdt *= 0.06;
     }
-    this.phaseT += dt;
+    this.phaseT += this.phase === 'fight' ? dt : ceremony(dt);
     this.netClock += dt;
     this.updatePhase(dt);
     const c1 = this.ai ? this.ai.update(sdt, this.mechs[1], this.mechs[0], this.world) : this.takeRemoteInput();
@@ -756,6 +757,7 @@ export class Battle implements Screen {
     hud.setTimer(this.timeLeft);
     const w = me.spec.weapons;
     hud.setGauges(me.gauges, { lw: w.lw.cost, rw: w.rw.cost, cw: w.cw.cost });
+    hud.setEN(me.en, me.enEmpty);
 
     const showRet = (this.phase === 'fight' || this.phase === 'ready') && foe.alive;
     if (showRet) {
@@ -926,7 +928,7 @@ export class Battle implements Screen {
   }
 
   private updateResult(dt: number) {
-    this.resultT += dt;
+    this.resultT += ceremony(dt);
     const m = this.app.input.menu;
     if (this.rivalGone) {
       if (this.resultT > 0.5 && (m.confirm || m.back)) this.finish('quit');

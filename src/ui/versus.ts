@@ -3,6 +3,7 @@ import type { App, Screen } from '../app';
 import type { Flow } from '../flow';
 import { MechModel, makePose } from '../game/mechModel';
 import { FUJIN, JEBE, type MechId, type MechSpec, type StageId } from '../game/specs';
+import { ceremony } from '../core/testmode';
 import { NetLink, preloadNet, type LinkStatus } from '../net/link';
 import { isValidCode, makeRoomCode, normalizeCode, type LobbyMsg } from '../net/protocol';
 import { Hangar } from './screens';
@@ -392,7 +393,7 @@ export class VersusScreen implements Screen {
       }
     }
     if (this.starting && this.link?.role === 'host' && this.link.connected) {
-      this.startT += dt;
+      this.startT += ceremony(dt);
       if (!(this.myReady && this.rivalReady)) this.starting = false;
       else if (this.startT > 0.9 && this.rivalPick) {
         const stage = STAGE_IDS[Math.floor(Math.random() * STAGE_IDS.length)];

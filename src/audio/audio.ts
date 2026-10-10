@@ -8,6 +8,7 @@
  *   button.onclick = () => { audio.unlock(); audio.playMusic('title'); };
  *   audio.play('rifle', { pan: -0.3 });
  */
+import { NO_AUDIO } from '../core/testmode';
 import { clamp, SR } from './dsp';
 import { Library } from './library';
 import { Mixer } from './mixer';
@@ -65,7 +66,7 @@ export class AudioEngine {
   constructor() {
     if (typeof window === 'undefined') return;
     // offline rendering needs no user gesture: get the library going right away, off the main thread
-    setTimeout(() => void this.lib.load(), 30);
+    if (!NO_AUDIO) setTimeout(() => void this.lib.load(), 30);
     this.lib.onMusicReady(() => this.startPending());
     document.addEventListener('visibilitychange', () => this.onVisibility());
   }

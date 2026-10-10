@@ -4,6 +4,7 @@ import type { App, Screen } from '../app';
 import { makeControls } from '../core/input';
 import { clamp } from '../core/math';
 import { saveSettings, settings, type Difficulty, type PerfMode, type VideoMode } from '../core/settings';
+import { ceremony } from '../core/testmode';
 import type { Flow } from '../flow';
 import { Mech } from '../game/mech';
 import { MechModel, makePose } from '../game/mechModel';
@@ -32,8 +33,8 @@ export const CONTROLS_HTML = `
     <dl>
       <dt>W A S D</dt><dd>walk / strafe</dd>
       <dt>Q · E</dt><dd>quick turn (also ← →)</dd>
-      <dt>SPACE</dt><dd>jump</dd>
-      <dt>SHIFT</dt><dd>dash (hold to extend · mid-air = air dash)</dd>
+      <dt>SPACE</dt><dd>jump · hold to climb (EN)</dd>
+      <dt>SHIFT</dt><dd>tap = quick boost (EN) · hold = boost</dd>
       <dt>J</dt><dd>left weapon · LW</dd>
       <dt>L</dt><dd>right weapon · RW</dd>
       <dt>K or J+L</dt><dd>center weapon · CW</dd>
@@ -47,19 +48,21 @@ export const CONTROLS_HTML = `
     <dl>
       <dt>L-STICK</dt><dd>walk / strafe</dd>
       <dt>R-STICK</dt><dd>quick turn</dd>
-      <dt>A · B</dt><dd>jump · dash (also LB / RB)</dd>
+      <dt>A · B</dt><dd>jump / climb · boost (also LB / RB)</dd>
       <dt>LT · RT</dt><dd>LW · RW (both = CW)</dd>
       <dt>Y · X</dt><dd>CW · guard</dd>
     </dl>
     <h3>GAMEPAD · TWIN STICK</h3>
     <p>Each stick is one arcade lever. Both forward to walk, opposite directions to turn,
-    pull them apart to jump, push them together to guard. LB / RB = turbo (dash), LT / RT = triggers.</p>
+    pull them apart to jump, push them together to guard. LB / RB = turbo (boost), LT / RT = triggers.</p>
   </div>
 </div>
 <div class="ctl-tips">
   <span>Your VR locks on automatically.</span>
   <span>Fire close to the enemy = melee.</span>
-  <span>Shots change while dashing or airborne.</span>
+  <span>Momentum carries: boost, jump and land without losing speed.</span>
+  <span>Quick boosts and flight spend EN — let it refill.</span>
+  <span>Shots change while boosting or airborne.</span>
   <span>Big hits knock down — you're invincible while getting up.</span>
 </div>`;
 
@@ -541,7 +544,7 @@ export class SelectScreen implements Screen {
       }
       this.spin += dt * 0.55;
     } else {
-      this.chosenT += dt;
+      this.chosenT += ceremony(dt);
       // swing round to face the pilot and strike a pose
       const target = Math.round(this.spin / (Math.PI * 2)) * Math.PI * 2 + 0.8;
       this.spin += (target - this.spin) * Math.min(1, dt * 5);

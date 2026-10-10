@@ -18,6 +18,27 @@ const GETUP_TIME = 0.55;
 const DOWN_THRESHOLD = 160;
 /** how long a jump/dash/fire press is remembered while the mech is busy */
 const BUFFER = 0.15;
+/** a quick-boost press made during the gap after a burst still comes out when the gap ends */
+const DASH_BUFFER = 0.25;
+/** quick boost: length of the burst, and the shortest gap between two bursts */
+const QB_TIME = 0.14;
+const QB_GAP = 0.22;
+/** EN: refill starts this long after the last spend; running dry locks boosting for at least
+ *  EN_OUT_TIME and until the gauge is back to EN_RESUME */
+const EN_DELAY = 0.35;
+const EN_OUT_TIME = 1.1;
+const EN_RESUME = 0.3;
+/** EN per second while thrusting up / boosting in the air */
+const EN_THRUST = 0.3;
+const EN_AIRBOOST = 0.3;
+/** thrust fades out between these heights above the arena floor (not above whatever block you stand
+ *  on — the tallest pillars are 34 high), so fights stay in frame */
+const CEIL_START = 26;
+const CEIL = 36;
+/** speed above the boost that a quick-boost burst sheds per second once it's over (u/s²) */
+const QB_SHED = 140;
+/** a fall this much faster than a plain jump lands with a short crouch; anything softer touches down at full speed */
+const HARD_LANDING = 1.25;
 
 const _f = new THREE.Vector3();
 const _r = new THREE.Vector3();
@@ -45,12 +66,22 @@ export class Mech {
   exploded = false;
   groundY = 0;
 
-  private dashDir = new THREE.Vector3();
+  /** boost energy 0..1: quick boosts, thrusting and air boosting spend it; it refills when you ease off */
+  en = 1;
+  private overheat = false;
+  private overheatT = 0;
+  private enIdle = 9;
+  /** quick-boost burst: direction, time left, gap before the next one */
+  private qbDir = new THREE.Vector3();
+  private qbT = 0;
+  private qbGap = 0;
+  private thrusting = false;
+  /** DASH held last frame (landing while held keeps the boost going) */
+  private dashHeld = false;
+  /** lean of the boost pose, from the actual direction of travel relative to facing */
   private dashF = 1;
   private dashS = 0;
   private dashShot = false;
-  private dashCooldown = 0;
-  private airDashUsed = false;
   private landTime = 0.15;
   private dustT = 0;
   private fxT = 0;
@@ -66,8 +97,6 @@ export class Mech {
   private bufDash = 0;
   private bufSlot: Slot | null = null;
   private bufFireT = 0;
-  /** post-dash skid: less ground grip so the dash's momentum carries into the next move */
-  private slideT = 0;
   /** keeps the gun arm up between consecutive shots */
   private aimHold = 0;
 
@@ -97,6 +126,11 @@ export class Mech {
     return this.hp / this.spec.hp;
   }
 
+  /** EN ran dry: no quick boosts or flight until it recovers */
+  get enEmpty() {
+    return this.overheat;
+  }
+
   centerInto(out: THREE.Vector3) {
     const k = this.state === 'down' || this.state === 'dead' ? 0.15 : 0.55;
     return out.set(this.pos.x, this.pos.y + this.spec.height * k + (k < 0.5 ? 0.8 : 0), this.pos.z);
@@ -123,8 +157,13 @@ export class Mech {
     this.exploded = false;
     this.groundY = 0;
     this.prevY = pos.y;
-    this.bufJump = this.bufDash = this.bufFireT = this.slideT = this.aimHold = 0;
+    this.bufJump = this.bufDash = this.bufFireT = this.aimHold = 0;
     this.bufSlot = null;
+    this.en = 1;
+    this.overheat = false;
+    this.enIdle = 9;
+    this.qbT = this.qbGap = 0;
+    this.thrusting = this.dashHeld = false;
     this.model.root.visible = true;
     this.model.root.position.copy(pos);
     this.model.root.rotation.y = yaw;
@@ -163,13 +202,16 @@ export class Mech {
     this.stateT += dt;
     if (this.invuln > 0) this.invuln -= dt;
     this.downValue = Math.max(0, this.downValue - 50 * dt);
-    if (this.dashCooldown > 0) this.dashCooldown -= dt;
+    if (this.qbT > 0) this.qbT -= dt;
+    if (this.qbGap > 0) this.qbGap -= dt;
+    this.updateEN(dt);
+    this.thrusting = false;
     for (const s of SLOTS) {
       if (!(this.action && this.action.slot === s)) this.gauges[s] = Math.min(1, this.gauges[s] + this.spec.weapons[s].regen * dt);
     }
     this.prevY = this.pos.y;
     this.bufJump = c.jumpPressed ? BUFFER : Math.max(0, this.bufJump - dt);
-    this.bufDash = c.dashPressed ? BUFFER : Math.max(0, this.bufDash - dt);
+    this.bufDash = c.dashPressed ? DASH_BUFFER : Math.max(0, this.bufDash - dt);
     const pressed: Slot | null = c.fireCW ? 'cw' : c.fireRW ? 'rw' : c.fireLW ? 'lw' : null;
     if (pressed) {
       if (pressed === 'cw') this.upgradeToCW();
@@ -179,24 +221,24 @@ export class Mech {
       this.bufFireT -= dt;
       if (this.bufFireT <= 0) this.bufSlot = null;
     }
-    if (this.slideT > 0) this.slideT -= dt;
 
     switch (this.state) {
       case 'ground':
         this.updateGround(dt, c, w);
         break;
       case 'dash':
-        this.updateDash(dt, c, w);
+        this.updateBoost(dt, c, w);
         break;
       case 'air':
         this.updateAir(dt, c, w);
         break;
       case 'airdash':
-        this.updateAirDash(dt, w);
+        this.updateAirBoost(dt, c, w);
         break;
       case 'land':
-        this.friction(dt, 8);
-        if (this.stateT >= this.landTime) this.setState('ground');
+        // a hard landing: crouch for a beat, skidding on the speed you came in with
+        this.drive(0, 0, 0, this.spec.grip * 0.6, 0, dt);
+        if (this.stateT >= this.landTime) this.setState(c.dash ? 'dash' : 'ground');
         break;
       case 'guard':
         this.friction(dt, 12);
@@ -221,6 +263,7 @@ export class Mech {
         if (this.onGround) this.friction(dt, 2.5);
         break;
     }
+    this.dashHeld = c.dash;
 
     this.updateFacing(dt, c);
     if (this.action) this.advanceAction(dt, w);
@@ -246,13 +289,19 @@ export class Mech {
     if (free && this.bufJump > 0) {
       this.bufJump = 0;
       this.cancelAction(w);
-      this.jump(w, false);
+      this.jump(w);
       return;
     }
-    if (free && this.bufDash > 0 && this.dashCooldown <= 0) {
+    if (free && this.bufDash > 0 && this.qbGap <= 0) {
       this.bufDash = 0;
       this.cancelAction(w);
-      this.startDash(c, w, false);
+      this.quickBoost(c, w, false);
+      return;
+    }
+    if (free && c.dash && !this.action) {
+      // DASH still held (e.g. through a landing): straight back into the boost
+      this.setState('dash');
+      this.dashShot = false;
       return;
     }
     this.tryAttack(w, 'ground');
@@ -260,148 +309,272 @@ export class Mech {
     if (a?.lunge) return;
     // walking shots keep you moving; planted shots let your momentum slide out instead of stopping dead
     if (a && a.moveMul <= 0) this.friction(dt, a.slide ?? 4);
-    else this.walk(dt, c, a ? a.moveMul : 1, a ? 60 : this.slideT > 0 ? 75 : 110);
+    else this.walk(dt, c, a ? a.moveMul : 1, a ? 0.55 : 1);
   }
 
-  private walk(dt: number, c: ControlFrame, mul: number, accelRate: number) {
-    let mx = c.moveX;
-    let my = c.moveY;
-    const m = Math.hypot(mx, my);
-    if (m > 1) {
-      mx /= m;
-      my /= m;
-    }
-    const speed = (my < -0.2 ? this.spec.backSpeed : this.spec.walkSpeed) * mul;
+  /** Stick direction in world space (unit, or zero when the stick is at rest). */
+  private stickWorld(c: ControlFrame, out: THREE.Vector3) {
+    const m = Math.hypot(c.moveX, c.moveY);
+    if (m < 0.2) return out.set(0, 0, 0);
     forwardOf(this.yaw, _f);
     rightOf(this.yaw, _r);
-    const tx = (_f.x * my + _r.x * mx) * speed;
-    const tz = (_f.z * my + _r.z * mx) * speed;
-    const accel = accelRate * dt;
-    let dx = tx - this.vel.x;
-    let dz = tz - this.vel.z;
-    const dl = Math.hypot(dx, dz);
-    if (dl > accel) {
-      dx *= accel / dl;
-      dz *= accel / dl;
-    }
-    this.vel.x += dx;
-    this.vel.z += dz;
+    const k = 1 / m;
+    return out.set((_f.x * c.moveY + _r.x * c.moveX) * k, 0, (_f.z * c.moveY + _r.z * c.moveX) * k);
   }
 
-  private startDash(c: ControlFrame, w: World, air: boolean) {
-    let mx = c.moveX;
-    let my = c.moveY;
-    let m = Math.hypot(mx, my);
-    if (m < 0.3) {
-      mx = 0;
-      my = 1;
-      m = 1;
+  private walk(dt: number, c: ControlFrame, mul: number, accelMul: number) {
+    const speed = (c.moveY < -0.2 ? this.spec.backSpeed : this.spec.walkSpeed) * mul * Math.min(1, Math.hypot(c.moveX, c.moveY));
+    this.stickWorld(c, _v);
+    // a burst's surplus goes quickly; boost speed slides off over a moment — faster if you let go
+    const hs = Math.hypot(this.vel.x, this.vel.z);
+    const dec = hs > this.spec.boostSpeed ? QB_SHED : _v.lengthSq() > 0 ? this.spec.grip : this.spec.grip * 1.3;
+    this.drive(_v.x * speed, _v.z * speed, this.spec.accel * accelMul, dec, this.spec.carve, dt);
+  }
+
+  /**
+   * Steer horizontal velocity toward (tx, tz) like a heavy frame: speed up at `acc`, shed excess
+   * speed at `dec`, and bend a moving line at most `carve` u/s² sideways — so momentum carries,
+   * and a direction change at speed draws an arc instead of snapping.
+   */
+  private drive(tx: number, tz: number, acc: number, dec: number, carve: number, dt: number) {
+    const vx = this.vel.x;
+    const vz = this.vel.z;
+    const s = Math.hypot(vx, vz);
+    const ts = Math.hypot(tx, tz);
+    if (ts < 1e-3) {
+      // no input: coast down
+      if (s > 1e-4) {
+        const k = Math.max(0, s - dec * dt) / s;
+        this.vel.x = vx * k;
+        this.vel.z = vz * k;
+      }
+      return;
     }
-    mx /= m;
-    my /= m;
-    forwardOf(this.yaw, _f);
-    rightOf(this.yaw, _r);
-    this.dashDir.set(_f.x * my + _r.x * mx, 0, _f.z * my + _r.z * mx).normalize();
-    this.dashF = my;
-    this.dashS = mx;
+    const ux = tx / ts;
+    const uz = tz / ts;
+    if (s < 0.5) {
+      const ns = Math.min(ts, s + acc * dt);
+      this.vel.x = ux * ns;
+      this.vel.z = uz * ns;
+      return;
+    }
+    let dx = vx / s;
+    let dz = vz / s;
+    const dot = dx * ux + dz * uz;
+    let ns: number;
+    if (dot < -0.2) {
+      // reversing: brake hard, then turn round
+      ns = Math.max(0, s - (acc + dec) * dt);
+      if (ns < 2) {
+        dx = ux;
+        dz = uz;
+      }
+    } else {
+      // lateral acceleration is capped, so the turn rate falls as speed rises
+      const ang = Math.atan2(dx * uz - dz * ux, dot);
+      const turn = clamp(ang, -(carve / Math.max(s, 4)) * dt, (carve / Math.max(s, 4)) * dt);
+      const cs = Math.cos(turn);
+      const sn = Math.sin(turn);
+      const nx = dx * cs - dz * sn;
+      dz = dx * sn + dz * cs;
+      dx = nx;
+      ns = s < ts ? Math.min(ts, s + acc * dt) : Math.max(ts, s - dec * dt);
+    }
+    this.vel.x = dx * ns;
+    this.vel.z = dz * ns;
+  }
+
+  // ------------------------------------------------------------------ EN
+
+  private updateEN(dt: number) {
+    this.enIdle += dt;
+    if (this.enIdle > EN_DELAY) this.en = Math.min(1, this.en + this.spec.enRegen * dt);
+    if (this.overheat) {
+      this.overheatT -= dt;
+      if (this.overheatT <= 0 && this.en >= EN_RESUME) this.overheat = false;
+    }
+  }
+
+  /** Pay a lump of EN (quick boost); false when there isn't enough or the gauge is locked out. */
+  private spend(cost: number) {
+    if (this.overheat || this.en < cost - 1e-4) return false;
+    this.en -= cost;
+    this.enIdle = 0;
+    if (this.en <= 1e-3) this.burnOut();
+    return true;
+  }
+
+  /** Spend EN continuously (thrust, air boost); false once it runs dry. */
+  private drain(rate: number, dt: number) {
+    if (this.overheat) return false;
+    this.en -= rate * dt;
+    this.enIdle = 0;
+    if (this.en > 0) return true;
+    this.burnOut();
+    return false;
+  }
+
+  private burnOut() {
+    this.en = 0;
+    this.overheat = true;
+    this.overheatT = EN_OUT_TIME;
+  }
+
+  // ------------------------------------------------------------------ boosting
+
+  /**
+   * Tap DASH: a sharp burst toward the stick (forward when it's at rest) that keeps half your
+   * sideways momentum, so bursts chain into curves. Holding DASH flows on into the boost.
+   */
+  private quickBoost(c: ControlFrame, w: World, air: boolean) {
+    this.stickWorld(c, _v);
+    if (_v.lengthSq() === 0) forwardOf(this.yaw, _v);
     this.dashShot = false;
-    this.dustT = 0;
+    if (!this.spend(this.spec.qbCost)) {
+      // out of EN: the ground boost itself is free, the burst isn't
+      if (this.isPlayer) w.sound('empty', this.pos, 0.5);
+      if (!air) this.setState('dash');
+      return;
+    }
+    this.setState(air ? 'airdash' : 'dash');
+    this.qbDir.copy(_v);
+    this.qbT = QB_TIME;
+    this.qbGap = QB_GAP;
+    const along = this.vel.x * _v.x + this.vel.z * _v.z;
+    const sx = this.vel.x - _v.x * along;
+    const sz = this.vel.z - _v.z * along;
+    const sp = Math.max(along, this.spec.qbSpeed);
+    this.vel.x = _v.x * sp + sx * 0.5;
+    this.vel.z = _v.z * sp + sz * 0.5;
     if (air) {
-      this.setState('airdash');
-      this.airDashUsed = true;
-      this.vel.y = Math.max(0, this.vel.y * 0.2);
+      this.vel.y = Math.max(0, this.vel.y * 0.4);
       w.sound('airDash', this.pos);
     } else {
-      this.setState('dash');
       w.sound('dash', this.pos);
       w.fx.dust(this.pos, 8, w.dustColor, 1.5);
     }
   }
 
-  private updateDash(dt: number, c: ControlFrame, w: World) {
-    const t = this.stateT;
-    if (!this.action || this.action.keepDash) {
-      const sp = this.spec.dashSpeed * Math.min(1, 0.45 + t / 0.08);
-      this.vel.x = this.dashDir.x * sp;
-      this.vel.z = this.dashDir.z * sp;
-    }
-    if (!this.action && this.bufJump > 0) {
-      this.bufJump = 0;
-      this.jump(w, true);
+  /** Ground boost (state 'dash'): DASH held after the burst — a fast, steerable glide that costs no EN. */
+  private updateBoost(dt: number, c: ControlFrame, w: World) {
+    const free = this.canCancel();
+    if (free && c.guard) {
+      // guard straight out of a boost: you skid into the stance
+      this.cancelAction(w);
+      this.setState('guard');
       return;
+    }
+    if (free && this.bufJump > 0) {
+      // boost-jump: every bit of speed goes up with you
+      this.bufJump = 0;
+      this.cancelAction(w);
+      this.jump(w);
+      return;
+    }
+    if (free && this.bufDash > 0 && this.qbGap <= 0) {
+      this.bufDash = 0;
+      this.cancelAction(w);
+      this.quickBoost(c, w, false);
     }
     if (!this.dashShot && this.tryAttack(w, 'dash')) {
       this.dashShot = true;
       if (this.state !== 'dash') return;
     }
-    const over = (t > this.spec.dashMin && !c.dash) || t > this.spec.dashMax;
-    if (over && (!this.action || this.action.keepDash)) {
+    const steer = !this.action || this.action.keepDash;
+    if (!c.dash && this.qbT <= 0 && steer) {
+      // let go: the speed carries on into the walk and bleeds off from there
       this.setState('ground');
-      this.dashCooldown = 0.1;
-      // carry the dash into a short skid instead of stopping dead
-      this.vel.x *= 0.75;
-      this.vel.z *= 0.75;
-      this.slideT = 0.18;
       return;
     }
+    if (steer) this.boostDrive(dt, c, this.spec.boostSpeed, 1);
     this.dustT -= dt;
     if (this.dustT <= 0) {
       this.dustT = 0.045;
-      _p.copy(this.pos).addScaledVector(this.dashDir, -2);
+      _p.set(this.pos.x - this.vel.x * 0.05, this.pos.y, this.pos.z - this.vel.z * 0.05);
       w.fx.dust(_p, 1, w.dustColor, 1.2, 2.2);
     }
   }
 
-  private jump(w: World, fromDash: boolean) {
+  /** Boost steering shared by ground and air: the burst is committed, the glide follows the stick. */
+  private boostDrive(dt: number, c: ControlFrame, speed: number, grip: number) {
+    const sp = this.spec;
+    if (this.qbT > 0) {
+      this.drive(this.qbDir.x * sp.qbSpeed, this.qbDir.z * sp.qbSpeed, sp.accel * 3, 25, sp.carve * 0.25, dt);
+      return;
+    }
+    this.stickWorld(c, _v);
+    if (_v.lengthSq() === 0) {
+      // stick at rest: hold the current line
+      const s = Math.hypot(this.vel.x, this.vel.z);
+      if (s > 1) _v.set(this.vel.x / s, 0, this.vel.z / s);
+      else forwardOf(this.yaw, _v);
+    }
+    // the burst's surplus speed drops off quickly; the glide itself is held
+    this.drive(_v.x * speed, _v.z * speed, sp.accel * grip, QB_SHED * grip, sp.carve * grip, dt);
+  }
+
+  private jump(w: World) {
     this.setState('air');
-    this.vel.y = this.spec.jumpVel;
-    this.airDashUsed = false;
-    const k = fromDash ? 0.75 : 0.9;
-    this.vel.x *= k;
-    this.vel.z *= k;
+    this.vel.y = Math.max(this.vel.y, this.spec.jumpVel);
     w.sound('jump', this.pos);
     w.fx.dust(this.pos, 10, w.dustColor, 1.5);
   }
 
+  /** Hold JUMP in the air: thrusters hold a steady climb (EN), fading out toward the ceiling. */
+  private thrust(dt: number, c: ControlFrame) {
+    if (!c.jump || this.stateT < 0.08 || this.vel.y >= this.spec.ascendSpeed) return;
+    const room = clamp((CEIL - this.pos.y) / (CEIL - CEIL_START), 0, 1);
+    if (room <= 0 || !this.drain(EN_THRUST, dt)) return;
+    this.vel.y += (this.spec.ascendSpeed * room - this.vel.y) * Math.min(1, 9 * dt);
+    this.thrusting = true;
+  }
+
   private updateAir(dt: number, c: ControlFrame, w: World) {
-    forwardOf(this.yaw, _f);
-    rightOf(this.yaw, _r);
-    const sp = this.spec.walkSpeed * 0.8;
-    const tx = (_f.x * c.moveY + _r.x * c.moveX) * sp;
-    const tz = (_f.z * c.moveY + _r.z * c.moveX) * sp;
-    if (Math.abs(c.moveX) + Math.abs(c.moveY) > 0.1) {
-      const a = 20 * dt;
-      this.vel.x += clamp(tx - this.vel.x, -a, a);
-      this.vel.z += clamp(tz - this.vel.z, -a, a);
-    }
-    if (this.bufDash > 0 && !this.airDashUsed && this.canCancel()) {
+    this.thrust(dt, c);
+    // airborne you mostly ride your momentum: weak steering, almost no drag
+    this.stickWorld(c, _v);
+    const sp = this.spec.walkSpeed;
+    this.drive(_v.x * sp, _v.z * sp, 30, 6, 42, dt);
+    const free = this.canCancel();
+    if (free && this.bufDash > 0 && this.qbGap <= 0 && !this.overheat) {
       this.bufDash = 0;
       this.cancelAction(w);
-      this.startDash(c, w, true);
+      this.quickBoost(c, w, true);
+      return;
+    }
+    if (free && c.dash && !this.action && !this.overheat && this.en > 0.05) {
+      // DASH held through the jump: keep boosting in the air
+      this.setState('airdash');
+      this.dashShot = false;
       return;
     }
     this.tryAttack(w, 'air');
   }
 
-  private updateAirDash(dt: number, w: World) {
-    const t = this.stateT;
-    if (!this.action || this.action.keepDash) {
-      const sp = this.spec.airDashSpeed * Math.min(1, 0.45 + t / 0.07);
-      this.vel.x = this.dashDir.x * sp;
-      this.vel.z = this.dashDir.z * sp;
+  /** Air boost (state 'airdash'): DASH held in the air — a hover-glide that spends EN. */
+  private updateAirBoost(dt: number, c: ControlFrame, w: World) {
+    const free = this.canCancel();
+    if (free && this.bufDash > 0 && this.qbGap <= 0) {
+      this.bufDash = 0;
+      this.cancelAction(w);
+      this.quickBoost(c, w, true);
     }
     if (!this.dashShot && this.tryAttack(w, 'air')) this.dashShot = true;
-    if (t > this.spec.airDashTime) {
+    // the burst is already paid for; the glide after it runs on EN
+    const fuel = this.qbT > 0 || this.drain(EN_AIRBOOST, dt);
+    if ((!c.dash && this.qbT <= 0) || !fuel) {
       this.setState('air');
-      this.vel.x *= 0.7;
-      this.vel.z *= 0.7;
+      return;
     }
+    this.thrust(dt, c);
+    // hovering: the fall levels off into a slow sink
+    if (!this.thrusting && this.vel.y < -2) this.vel.y += (-2 - this.vel.y) * Math.min(1, 5 * dt);
+    if (!this.action || this.action.keepDash || this.action.hover) this.boostDrive(dt, c, this.spec.airBoostSpeed, 0.8);
     this.dustT -= dt;
     if (this.dustT <= 0) {
       this.dustT = 0.04;
-      _p.copy(this.pos);
-      _p.y += 3;
-      w.fx.trail(_p.addScaledVector(this.dashDir, -2.5), this.palette.flame, 2.2, 0.25, 0.5);
+      _p.set(this.pos.x - this.vel.x * 0.06, this.pos.y + 3, this.pos.z - this.vel.z * 0.06);
+      w.fx.trail(_p, this.palette.flame, 2.2, 0.25, 0.5);
     }
   }
 
@@ -529,7 +702,7 @@ export class Mech {
     const airborne = this.pos.y > this.groundY + 0.01 || this.vel.y > 0;
     if (airborne) {
       let g = this.spec.gravity;
-      if (this.state === 'airdash') g = 8;
+      if (this.state === 'airdash') g *= this.qbT > 0 ? 0.15 : 0.25;
       if (this.action?.hover && (this.state === 'air' || this.state === 'airdash')) {
         // air shots keep the jump arc going, with a brief hang instead of a dead stop
         g *= 0.3;
@@ -567,9 +740,8 @@ export class Mech {
       }
     } else if (this.state === 'ground' || this.state === 'dash' || this.state === 'land' || this.state === 'guard' || this.state === 'getup') {
       if (this.pos.y > gy + 0.4) {
-        // walked off a ledge
-        this.setState('air');
-        this.airDashUsed = false;
+        // ran off a ledge: momentum and all
+        this.setState(this.state === 'dash' && this.dashHeld ? 'airdash' : 'air');
       } else {
         this.pos.y = gy;
       }
@@ -578,13 +750,15 @@ export class Mech {
 
   private onLand(w: World, impact: number) {
     if (this.state === 'air' || this.state === 'airdash') {
-      this.setState('land');
-      this.landTime = this.airDashUsed ? 0.3 : 0.15;
-      this.vel.x *= 0.5;
-      this.vel.z *= 0.5;
-      w.sound('land', this.pos, 0.8);
-      w.fx.dust(this.pos, 10, w.dustColor, 2);
-      if (this.spec.id === 'fujin') w.shake(0.15, this.pos);
+      // touch down at full speed — only a hard fall costs a beat — and keep boosting if DASH is held
+      const hard = impact > this.spec.jumpVel * HARD_LANDING;
+      if (hard) {
+        this.setState('land');
+        this.landTime = 0.16;
+      } else this.setState(this.dashHeld ? 'dash' : 'ground');
+      w.sound('land', this.pos, hard ? 0.9 : 0.6);
+      w.fx.dust(this.pos, hard ? 12 : 7, w.dustColor, 2);
+      if (this.spec.id === 'fujin' && hard) w.shake(0.15, this.pos);
     } else if ((this.state === 'down' || this.state === 'dead') && impact > 6) {
       w.fx.dust(this.pos, 14, w.dustColor, 3, 3);
       w.sound('land', this.pos, 1);
@@ -626,8 +800,15 @@ export class Mech {
     return true;
   }
 
+  /** A hit takes the controls: any burst in progress is over. */
+  private interrupt() {
+    this.qbT = 0;
+    this.thrusting = false;
+  }
+
   private stagger(h: Hit) {
     this.action = null;
+    this.interrupt();
     this.setState('stagger');
     this.vel.x = h.dir.x * 7;
     this.vel.z = h.dir.z * 7;
@@ -636,6 +817,7 @@ export class Mech {
 
   private knockDown(h: Hit, w: World) {
     this.cancelAction(w);
+    this.interrupt();
     this.setState('down');
     this.downValue = 0;
     this.vel.set(h.dir.x * 16, 9, h.dir.z * 16);
@@ -644,6 +826,7 @@ export class Mech {
 
   private die(h: Hit, w: World) {
     this.cancelAction(w);
+    this.interrupt();
     this.setState('dead');
     this.deathT = 0;
     this.fxT = 0;
@@ -678,6 +861,11 @@ export class Mech {
     const airborne = st === 'air' || (st === 'stagger' && this.pos.y > this.groundY + 0.5);
     this.wAir = damp(this.wAir, airborne ? 1 : 0, 12, dt);
     this.wDash = damp(this.wDash, st === 'dash' || st === 'airdash' ? 1 : 0, 14, dt);
+    if ((st === 'dash' || st === 'airdash') && hs > 2) {
+      // lean into the actual line of travel, so drifts and carves read on the body
+      this.dashF = damp(this.dashF, (this.vel.x * _f.x + this.vel.z * _f.z) / hs, 12, dt);
+      this.dashS = damp(this.dashS, (this.vel.x * _r.x + this.vel.z * _r.z) / hs, 12, dt);
+    }
     p.air = this.wAir;
     p.dash = this.wDash;
     p.dashF = this.dashF;
@@ -733,7 +921,8 @@ export class Mech {
     p.twist = damp(p.twist, this.alive && st !== 'down' && st !== 'getup' ? clamp(err, -twistMax, twistMax) : 0, 10, dt);
     const rising = st === 'air' && this.vel.y > 2;
     const hovering = !!a?.hover && st === 'air';
-    p.thrust = st === 'dash' || st === 'airdash' ? 1 : rising ? 0.7 : hovering ? 0.55 : st === 'air' ? 0.15 : 0;
+    p.thrust =
+      this.qbT > 0 ? 1.7 : this.thrusting ? 1.1 : st === 'dash' || st === 'airdash' ? 0.9 : rising ? 0.7 : hovering ? 0.55 : st === 'air' ? 0.15 : 0;
   }
 
   private ambientFx(dt: number, w: World) {
@@ -808,6 +997,8 @@ export class Mech {
       a?.charge ? r2(a.charge[0]) : -1,
       a?.charge ? r2(a.charge[1]) : -1,
       a ? (a.lunge ? 1 : 0) | (a.hover ? 2 : 0) : 0,
+      r2(this.en),
+      (this.overheat ? 1 : 0) | (this.qbT > 0 ? 2 : 0) | (this.thrusting ? 4 : 0),
     ];
   }
 
@@ -846,6 +1037,11 @@ export class Mech {
     this.dashS = a[14];
     this.netExploded = (a[15] & 1) !== 0;
     this.pose.recoil = Math.max(this.pose.recoil, a[16]);
+    this.en = a[25] ?? 1;
+    const fl = a[26] ?? 0;
+    this.overheat = (fl & 1) !== 0;
+    this.qbT = fl & 2 ? QB_TIME : 0;
+    this.thrusting = (fl & 4) !== 0;
     if (a[17] < 0) {
       this.action = null;
       return;

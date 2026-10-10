@@ -19,7 +19,7 @@ const BUTTONS: ButtonDef[] = [
   { id: 'lw', label: 'LW', x: 178, y: 52, d: 66 },
   { id: 'cw', label: 'CW', x: 168, y: 142, d: 62 },
   { id: 'jump', label: 'JUMP', x: 70, y: 192, d: 68 },
-  { id: 'dash', label: 'DASH', x: 262, y: 70, d: 70 },
+  { id: 'dash', label: 'BOOST', x: 262, y: 70, d: 70 },
   { id: 'guard', label: 'GUARD', x: 258, y: 160, d: 52 },
 ];
 
@@ -220,6 +220,8 @@ export class TouchControls implements TouchHooks {
       }
     }
     if (hold) t[hold] = true;
+    if (hold === 'jump') t.jumpTap = true;
+    else if (hold === 'dash') t.dashTap = true;
   }
 
   private release(btn: Button, pointerId: number) {
@@ -288,6 +290,6 @@ export class TouchControls implements TouchHooks {
     for (const b of this.buttons) if (b.pointer !== null) this.release(b, b.pointer);
     const t = this.input.touch;
     t.moveX = t.moveY = 0;
-    t.jump = t.dash = t.guard = false;
+    t.jump = t.dash = t.guard = t.jumpTap = t.dashTap = false;
   }
 }

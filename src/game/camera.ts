@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { clamp, damp, dampAngle, rand, smoothstep } from '../core/math';
+import { reducedMotion } from '../core/settings';
 import type { Mech } from './mech';
 
 const _bp = new THREE.Vector3();
@@ -56,8 +57,10 @@ export class ChaseCamera {
     this.pos.set(m.pos.x - sx * dist, this.fy + height, m.pos.z - sz * dist);
     const dy = clamp((t.pos.y - this.fy) * 0.45, -4, 12);
     this.look.set(m.pos.x + sx * 26, this.fy + 2.4 + dy, m.pos.z + sz * 26);
-    const dashing = m.state === 'dash' || m.state === 'airdash';
-    this.fov = damp(this.fov, dashing ? 69 : 62, 5, dt);
+    // the faster you're actually moving, the wider the lens: bursts and boost-jumps feel fast
+    const hs = Math.hypot(m.vel.x, m.vel.z);
+    const speed = clamp((hs - m.spec.walkSpeed) / (m.spec.qbSpeed - m.spec.walkSpeed), 0, 1);
+    this.fov = damp(this.fov, reducedMotion ? 62 : 62 + 10 * speed, 6, dt);
     this.apply(dt, shake);
   }
 

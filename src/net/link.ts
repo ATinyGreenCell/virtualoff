@@ -1,4 +1,5 @@
 import type { Room } from 'trystero';
+import { GRACE_S } from '../core/testmode';
 import { APP_ID, PROTOCOL, type EventsMsg, type InputMsg, type LobbyMsg, type Role, type SnapMsg } from './protocol';
 
 export type LinkStatus = 'connecting' | 'waiting' | 'connected' | 'reconnecting' | 'lost' | 'error';
@@ -8,7 +9,7 @@ const FIND_TIMEOUT_MS = 30_000;
 /** Snapshots dropped (not queued) once this many sends are still in flight — keeps latency bounded. */
 const MAX_INFLIGHT = 4;
 /** How long a dropped rival has to come back (Wi-Fi blip, app switch) before the match is given up. */
-const RECONNECT_GRACE_MS = 20_000;
+const RECONNECT_GRACE_MS = GRACE_S ? GRACE_S * 1000 : 20_000;
 /** Stream id of the real-time channel both peers open on Trystero's connection (its own channel is auto-numbered from 0). */
 const RT_ID = 77;
 /** Never queue real-time packets behind a congested link: the next one supersedes them anyway. */

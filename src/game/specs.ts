@@ -32,11 +32,24 @@ export interface MechSpec {
   hp: number;
   walkSpeed: number;
   backSpeed: number;
-  dashSpeed: number;
-  dashMin: number;
-  dashMax: number;
-  airDashSpeed: number;
-  airDashTime: number;
+  /** hold DASH on the ground: steerable high-speed glide (costs no EN) */
+  boostSpeed: number;
+  /** hold DASH in the air: hover-glide (costs EN) */
+  airBoostSpeed: number;
+  /** tap DASH: peak speed of the quick-boost burst */
+  qbSpeed: number;
+  /** EN spent per quick boost (the gauge is 0..1) */
+  qbCost: number;
+  /** EN refilled per second once you ease off */
+  enRegen: number;
+  /** hold JUMP: thruster climb rate */
+  ascendSpeed: number;
+  /** how hard the frame speeds up (u/s²) — lower = heavier */
+  accel: number;
+  /** sideways grip (u/s²): how tightly a fast line can bend — less grip, wider arcs */
+  carve: number;
+  /** ground braking (u/s²) when you let go — momentum above walking pace bleeds at half this while moving */
+  grip: number;
   jumpVel: number;
   gravity: number;
   /** auto-facing turn rate, rad/s */
@@ -62,11 +75,15 @@ export const JEBE: MechSpec = {
   hp: 1000,
   walkSpeed: 17,
   backSpeed: 14,
-  dashSpeed: 54,
-  dashMin: 0.3,
-  dashMax: 0.7,
-  airDashSpeed: 46,
-  airDashTime: 0.42,
+  boostSpeed: 41,
+  airBoostSpeed: 36,
+  qbSpeed: 70,
+  qbCost: 0.2,
+  enRegen: 0.55,
+  ascendSpeed: 15,
+  accel: 110,
+  carve: 100,
+  grip: 62,
   jumpVel: 30,
   gravity: 34,
   turnRate: 2.7,
@@ -112,11 +129,15 @@ export const FUJIN: MechSpec = {
   hp: 1250,
   walkSpeed: 13.5,
   backSpeed: 11,
-  dashSpeed: 45,
-  dashMin: 0.32,
-  dashMax: 0.68,
-  airDashSpeed: 37,
-  airDashTime: 0.38,
+  boostSpeed: 34,
+  airBoostSpeed: 29,
+  qbSpeed: 59,
+  qbCost: 0.24,
+  enRegen: 0.45,
+  ascendSpeed: 12,
+  accel: 78,
+  carve: 72,
+  grip: 48,
   jumpVel: 26,
   gravity: 36,
   turnRate: 2.15,

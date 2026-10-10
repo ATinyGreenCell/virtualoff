@@ -53,6 +53,9 @@ export interface TouchState {
   moveY: number;
   jump: boolean;
   dash: boolean;
+  /** a press since the last frame — a tap shorter than one frame still counts (quick boosts are taps) */
+  jumpTap: boolean;
+  dashTap: boolean;
   guard: boolean;
   lw: boolean;
   rw: boolean;
@@ -92,14 +95,15 @@ export class Input {
     pause: false,
     any: false,
   };
-  readonly touch: TouchState = { moveX: 0, moveY: 0, jump: false, dash: false, guard: false, lw: false, rw: false, cw: false };
+  readonly touch: TouchState = { moveX: 0, moveY: 0, jump: false, dash: false, jumpTap: false, dashTap: false, guard: false, lw: false, rw: false, cw: false };
   padConnected = false;
   lastDevice: InputDevice = 'keyboard';
   /** Called when the gamepad the player was using disconnects (e.g. to auto-pause). */
   onDeviceLost: (() => void) | null = null;
 
   private down = new Set<string>();
-  private pressed = new Set<string>();
+  /** key-downs not yet consumed, per key: two presses inside one slow frame come out over two frames */
+  private pressed = new Map<string, number>();
   private mousePressed = [false, false, false];
   /** mouse buttons currently held (PointerEvent.buttons bitmask) — chorded presses only arrive as pointermove */
   private mouseButtons = 0;
@@ -120,7 +124,7 @@ export class Input {
   constructor(target: HTMLElement) {
     window.addEventListener('keydown', (e) => {
       if (BLOCK_DEFAULT.has(e.code)) e.preventDefault();
-      if (!e.repeat) this.pressed.add(e.code);
+      if (!e.repeat) this.pressed.set(e.code, (this.pressed.get(e.code) ?? 0) + 1);
       this.down.add(e.code);
       this.lastDevice = 'keyboard';
     });
@@ -170,7 +174,7 @@ export class Input {
 
   /** Simulate a one-frame key press (e.g. the touch PAUSE button sends 'Escape'). */
   injectPress(code: string) {
-    this.pressed.add(code);
+    this.pressed.set(code, (this.pressed.get(code) ?? 0) + 1);
   }
 
   /** Drop any buffered presses (e.g. the click that started a battle). */
@@ -194,14 +198,18 @@ export class Input {
   update(dt: number, padMode: PadMode) {
     const c = this.controls;
     const k = (code: string) => this.down.has(code);
-    const kp = (code: string) => this.pressed.has(code);
+    const kp = (code: string) => (this.pressed.get(code) ?? 0) > 0;
 
     // --- keyboard + mouse ---
     let mx = (k('KeyD') ? 1 : 0) - (k('KeyA') ? 1 : 0);
     let my = (k('KeyW') ? 1 : 0) - (k('KeyS') ? 1 : 0);
     let turn = (k('KeyE') || k('ArrowRight') ? 1 : 0) - (k('KeyQ') || k('ArrowLeft') ? 1 : 0);
-    let jump = k('Space');
-    let dash = k('ShiftLeft') || k('ShiftRight');
+    // Every key-down is its own press: a tap that's already back up still counts, and two quick taps
+    // landing in consecutive slow frames stay two presses (quick boosts are taps).
+    let jumpTap = kp('Space');
+    let dashTap = kp('ShiftLeft') || kp('ShiftRight');
+    let jump = k('Space') || jumpTap;
+    let dash = k('ShiftLeft') || k('ShiftRight') || dashTap;
     let guard = k('KeyC');
     let lEdge = kp('KeyJ') || this.mousePressed[2];
     let rEdge = kp('KeyL') || this.mousePressed[0];
@@ -294,21 +302,24 @@ export class Input {
     const t = this.touch;
     mx += t.moveX;
     my += t.moveY;
-    jump ||= t.jump;
-    dash ||= t.dash;
+    jumpTap ||= t.jumpTap;
+    dashTap ||= t.dashTap;
+    jump ||= t.jump || jumpTap;
+    dash ||= t.dash || dashTap;
     guard ||= t.guard;
     lEdge ||= t.lw;
     rEdge ||= t.rw;
     cEdge ||= t.cw;
-    t.lw = t.rw = t.cw = false;
+    t.lw = t.rw = t.cw = t.jumpTap = t.dashTap = false;
 
     c.moveX = clamp(mx, -1, 1);
     c.moveY = clamp(my, -1, 1);
     c.turn = clamp(turn, -1, 1);
-    c.jumpPressed = jump && !this.prevJump;
+    // gamepads are polled, so for them a press is an up→down change between frames
+    c.jumpPressed = jumpTap || (jump && !this.prevJump);
     c.jump = jump;
     this.prevJump = jump;
-    c.dashPressed = dash && !this.prevDash;
+    c.dashPressed = dashTap || (dash && !this.prevDash);
     c.dash = dash;
     this.prevDash = dash;
     c.guard = guard;
@@ -328,7 +339,10 @@ export class Input {
     if (lEdge) this.sinceL = 0;
     if (rEdge) this.sinceR = 0;
 
-    this.pressed.clear();
+    for (const [code, n] of this.pressed) {
+      if (n > 1) this.pressed.set(code, n - 1);
+      else this.pressed.delete(code);
+    }
     this.mousePressed.fill(false);
     this.touchTap = false;
   }

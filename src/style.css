@@ -463,6 +463,61 @@ body {
   color: var(--yellow);
 }
 
+/* boost energy: a slim bar above the weapon gauges */
+.en {
+  position: absolute;
+  bottom: 74px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 340px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  opacity: 0.9;
+}
+
+.en-label {
+  font-family: var(--display);
+  font-size: 14px;
+  font-style: italic;
+  letter-spacing: 2px;
+  color: #8dffcf;
+}
+
+.en-bar {
+  flex: 1;
+  height: 7px;
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  background: rgba(0, 0, 0, 0.5);
+  transform: skewX(-30deg);
+  overflow: hidden;
+}
+
+.en-fill {
+  height: 100%;
+  background: linear-gradient(to bottom, #e8fff4, #2fe08f);
+  transform-origin: left center;
+}
+
+.en.low .en-fill {
+  background: linear-gradient(to bottom, #fff2c4, #ffb020);
+}
+
+.en.out .en-label {
+  color: var(--red);
+}
+
+.en.out .en-fill {
+  background: linear-gradient(to bottom, #ffd4d4, var(--red));
+  animation: enblink 0.24s steps(2) infinite;
+}
+
+@keyframes enblink {
+  50% {
+    opacity: 0.35;
+  }
+}
+
 .gauge.pulse .g-bar {
   animation: gpulse 0.35s ease-out;
 }
@@ -623,10 +678,12 @@ body {
 
 .controls-hint {
   position: absolute;
-  bottom: 84px;
+  bottom: 102px;
   left: 50%;
   transform: translateX(-50%);
-  white-space: nowrap;
+  width: max-content;
+  max-width: 94vw;
+  text-align: center;
   font-size: 13px;
   letter-spacing: 1px;
   padding: 6px 14px;
@@ -642,6 +699,13 @@ body {
 
 .controls-hint.show {
   opacity: 1;
+}
+
+/* touch screens get the on-screen controls instead of keyboard tips */
+@media (pointer: coarse) {
+  .controls-hint {
+    display: none;
+  }
 }
 
 .screen-flash {
@@ -1250,6 +1314,10 @@ body {
   .gauge,
   .g-cw {
     width: 28vw;
+  }
+  .en {
+    width: 52vw;
+    bottom: 54px;
   }
   .g-name {
     display: none;

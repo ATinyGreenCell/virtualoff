@@ -2,7 +2,7 @@ import type { ControlFrame } from '../core/input';
 import type { MechId, StageId } from '../game/specs';
 
 /** Bump whenever messages change shape; peers with different versions refuse to play. */
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
 export const APP_ID = 'virtual-off/versus/v1';
 
 export type Role = 'host' | 'guest';

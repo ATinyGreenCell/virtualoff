@@ -25,6 +25,7 @@ export class HUD {
   private bars: Bar[] = [];
   private timer: HTMLDivElement;
   private gauges = {} as Record<Slot, { root: HTMLDivElement; fill: HTMLDivElement; last: number; ready: boolean }>;
+  private en: { root: HTMLDivElement; fill: HTMLDivElement; last: number; state: string };
   private reticle: HTMLDivElement;
   private retDist: HTMLDivElement;
   private arrow: HTMLDivElement;
@@ -71,6 +72,11 @@ export class HUD {
     el('div', 'ret-lock', this.reticle, 'LOCK');
     this.arrow = el('div', 'off-arrow', this.root);
 
+    const enRoot = el('div', 'en', this.root);
+    el('div', 'en-label', enRoot, 'EN');
+    const enFill = el('div', 'en-fill', el('div', 'en-bar', enRoot));
+    this.en = { root: enRoot, fill: enFill, last: -1, state: '' };
+
     const gbox = el('div', 'gauges', this.root);
     for (const s of SLOTS) {
       const g = el('div', `gauge g-${s}`, gbox);
@@ -91,7 +97,7 @@ export class HUD {
     el('div', 'sb-vs', this.banner, `${p1.name}  VS  ${p2.name}`);
     this.hint = el('div', 'controls-hint', this.root);
     this.hint.innerHTML =
-      '<b>WASD</b> move · <b>Q/E</b> turn · <b>SPACE</b> jump · <b>SHIFT</b> dash · <b>J</b> LW · <b>L</b> RW · <b>K</b> or <b>J+L</b> CW · <b>C</b> guard · <b>ESC</b> pause';
+      '<b>WASD</b> move · <b>Q/E</b> turn · <b>SPACE</b> jump, hold to climb · <b>SHIFT</b> tap quick boost, hold boost · <b>J</b> LW · <b>L</b> RW · <b>K</b> or <b>J+L</b> CW · <b>C</b> guard · <b>ESC</b> pause';
   }
 
   setRoundLabel(round: number) {
@@ -130,6 +136,22 @@ export class HUD {
     this.lastTimer = v;
     this.timer.textContent = String(v).padStart(2, '0');
     this.timer.classList.toggle('low', v <= 10);
+  }
+
+  /** Boost energy: fill 0..1, `out` while it's burnt out and locked. */
+  setEN(frac: number, out: boolean) {
+    const e = this.en;
+    const v = Math.round(frac * 100) / 100;
+    if (v !== e.last) {
+      e.last = v;
+      e.fill.style.transform = `scaleX(${v})`;
+    }
+    const state = out ? 'out' : frac < 0.3 ? 'low' : '';
+    if (state !== e.state) {
+      e.state = state;
+      e.root.classList.toggle('out', out);
+      e.root.classList.toggle('low', state === 'low');
+    }
   }
 
   setGauges(g: Record<Slot, number>, costs: Record<Slot, number>) {
