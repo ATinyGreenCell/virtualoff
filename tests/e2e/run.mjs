@@ -49,7 +49,21 @@ async function startServer() {
 }
 
 const server = await startServer();
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => (server.stop(), process.exit(130)));
+/** each test runs in its own process group, so its browsers die with it even if the test crashes */
+const groups = new Set();
+const killGroup = (pid) => {
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    // already gone
+  }
+};
+for (const sig of ['SIGINT', 'SIGTERM'])
+  process.on(sig, () => {
+    for (const pid of groups) killGroup(pid);
+    server.stop();
+    process.exit(130);
+  });
 fs.mkdirSync(path.join(DIR, '.out/logs'), { recursive: true });
 const t0 = Date.now();
 const results = [];
@@ -58,13 +72,17 @@ const queue = [...TESTS].sort((a, b) => b.est - a.est);
 function run(t) {
   return new Promise((resolve) => {
     const start = Date.now();
-    const p = spawn(process.execPath, [t.file, ...(t.args ?? [])], { cwd: DIR, env: { ...process.env, E2E_BASE: server.base } });
+    const p = spawn(process.execPath, [t.file, ...(t.args ?? [])], { cwd: DIR, env: { ...process.env, E2E_BASE: server.base }, detached: true });
+    groups.add(p.pid);
     let out = '';
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (out += d));
-    const killer = setTimeout(() => p.kill('SIGKILL'), 240_000);
+    const killer = setTimeout(() => killGroup(p.pid), 240_000);
     p.on('close', () => {
       clearTimeout(killer);
+      // sweep up any browser the test left behind (a crash skips its browser.close())
+      killGroup(p.pid);
+      groups.delete(p.pid);
       const secs = (Date.now() - start) / 1000;
       fs.writeFileSync(path.join(DIR, '.out/logs', `${t.name}.log`), out);
       const ok = t.pass(out);
