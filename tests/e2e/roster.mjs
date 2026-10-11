@@ -57,6 +57,8 @@ const place = (d) => page.evaluate((d) => {
   b.pos.set(38, 0, 40 - d); b.vel.set(0, 0, 0); b.yaw = 0; b.state = 'ground'; b.action = null; b.hp = b.spec.hp; b.invuln = 0; b.snareT = 0; b.downValue = 0;
   for (const k of ['lw', 'rw', 'cw']) a.gauges[k] = 1;
   a.en = 1;
+  // a VR's checks outlast one round: keep the clock from running out (a time-up stops all damage)
+  s.timeLeft = 60;
 }, d);
 const look = () => page.evaluate(() => {
   const s = window.__vo.app.screen;
@@ -129,6 +131,22 @@ await place(40);
 await key('KeyJ');
 const fist = await waitFor(async () => { const v = await look(); return count(v.kinds, 'fist') ? v : null; }, 3000, 'rocket fist');
 const fisted = await waitFor(async () => { const v = await look(); return v.state === 'down' ? v : null; }, 4000, 'fist knockdown');
+// the fist stays off KONGO's arm for its whole flight, not just the punch (here it flies through an
+// invulnerable target and on to the far wall), and is back once it's spent
+await place(40);
+await page.evaluate(() => { window.__vo.app.screen.mechs[1].invuln = 9; });
+await key('KeyJ');
+const fistFlying = () => page.evaluate(() => {
+  const s = window.__vo.app.screen;
+  const a = s.mechs[0];
+  return { punching: !!a.action, flying: s.world.projectiles.list.some((p) => p.alive && p.owner === a && p.kind === 'fist'), shown: a.model.fistL.visible };
+});
+await waitFor(async () => { const v = await fistFlying(); return !v.punching && v.flying; }, 3000, 'punch over, fist still flying');
+await frames(3);
+const armOut = await fistFlying();
+const armBack = await waitFor(async () => { const v = await fistFlying(); return !v.flying && v.shown ? v : null; }, 5000, 'fist back on the arm');
+await page.evaluate(() => { window.__vo.app.screen.mechs[1].invuln = 0; });
+check('KONGO: the rocket fist leaves the arm for its whole flight', armOut.flying && !armOut.punching && !armOut.shown && !!armBack, JSON.stringify({ armOut, back: !!armBack }));
 await place(10);
 await key('KeyK');
 const slam = await waitFor(async () => { const v = await look(); return v.state === 'down' ? v : null; }, 4000, 'slam knockdown');
@@ -160,6 +178,64 @@ await page.keyboard.up('Space');
 const kongoY = await page.evaluate(() => +window.__vo.app.screen.mechs[0].pos.y.toFixed(2));
 check('KONGO: an air slam dives and lands its blow', !!airSlam && airSlam.hp > 50 && kongoY < 1, JSON.stringify({ hp: airSlam?.hp, kongoY }));
 check('KONGO: scatter gun, shoulder ram, rocket fist, quake slam', !!scatter && !!ram && !!rammed && !!fist && !!fisted && !!slam && slam.hp >= 100, JSON.stringify({ scatter: scatter?.kinds.length, ram: !!ram, rammed: rammed?.hp, fisted: fisted?.hp, slam: slam?.hp }));
+
+// the ram charges a rival in front, like any melee: boosting away from one behind fires the scatter gun
+// (it used to spin round and charge straight back)
+await place(30);
+await page.evaluate(() => { window.__vo.app.screen.mechs[0].yaw = 0; });
+await page.keyboard.down('KeyW');
+await page.keyboard.down('ShiftLeft');
+await frames(3);
+await page.evaluate(() => { window.__vo.app.screen.mechs[0].yaw = 0; });
+await key('KeyL');
+const awayShot = await waitFor(async () => { const v = await look(); return v.pose ? v : null; }, 2000, 'boost shot facing away');
+await page.keyboard.up('ShiftLeft');
+await page.keyboard.up('KeyW');
+check('KONGO: no ram at a rival behind it', awayShot?.pose === 'aimR', JSON.stringify({ pose: awayShot?.pose ?? null }));
+
+// one shot per boost, but landing starts a fresh boost: a shot from an air boost doesn't use up the
+// ground boost's (it used to swallow the ram until DASH was tapped again)
+await place(60);
+await page.evaluate(() => { const a = window.__vo.app.screen.mechs[0]; a.pos.y = 4; a.state = 'air'; a.vel.set(0, 0, 0); });
+await page.keyboard.down('ShiftLeft');
+await waitFor(() => page.evaluate(() => window.__vo.app.screen.mechs[0].state === 'airdash'), 2000, 'air boost');
+await key('KeyL');
+const airShot = await waitFor(async () => { const v = await look(); return v.pose === 'aimR' ? v : null; }, 2000, 'air boost shot');
+const boostLanded = await waitFor(() => page.evaluate(() => { const a = window.__vo.app.screen.mechs[0]; return a.state === 'dash' && !a.action; }), 5000, 'landed, still boosting');
+await page.evaluate(() => {
+  const [a, b] = window.__vo.app.screen.mechs;
+  b.pos.set(a.pos.x + Math.sin(a.yaw) * 30, 0, a.pos.z + Math.cos(a.yaw) * 30); b.vel.set(0, 0, 0); b.state = 'ground'; b.invuln = 0;
+  a.gauges.rw = 1;
+});
+await key('KeyL');
+const landedRam = await waitFor(async () => { const v = await look(); return v.pose === 'ram' ? v : null; }, 2000, 'ram after landing');
+await page.keyboard.up('ShiftLeft');
+check('KONGO: a boost shot in the air leaves the landing boost its own', !!airShot && !!boostLanded && !!landedRam, JSON.stringify({ airShot: !!airShot, landed: !!boostLanded, ram: !!landedRam }));
+
+// a ground slam that slides off a ledge comes down and lands its blow on the floor (it used to go
+// off halfway down the drop): KONGO on AQUA HARBOR's middle wall, sliding off, the rival below
+await place(40);
+const ledge = await page.evaluate(() => {
+  const s = window.__vo.app.screen;
+  const [a, b] = s.mechs;
+  const wall = s.world.arena.boxes.find((bx) => bx.max.x - bx.min.x > 30 && bx.max.z - bx.min.z <= 6 && bx.max.y >= 6 && bx.min.z > 0);
+  if (!wall) return null;
+  a.pos.set(0, wall.max.y, wall.max.z - 2); a.vel.set(0, 0, 32); a.yaw = 0; a.state = 'ground'; a.groundY = wall.max.y; a.action = null; a.gauges.cw = 1;
+  b.pos.set(0, 0, wall.max.z + 9); b.vel.set(0, 0, 0); b.hp = b.spec.hp; b.state = 'ground'; b.invuln = 0;
+  // fire the slam on the next frame, while still on top
+  a.bufSlot = 'cw';
+  a.bufFireT = 0.2;
+  window.__slamY = null;
+  const hp0 = b.hp;
+  const watch = () => {
+    if (b.hp < hp0) window.__slamY = +a.pos.y.toFixed(2);
+    else requestAnimationFrame(watch);
+  };
+  watch();
+  return { top: wall.max.y };
+});
+const slamAt = await waitFor(() => page.evaluate(() => (window.__slamY === null ? null : { y: window.__slamY })), 4000, 'ledge slam lands');
+check('KONGO: a slam off a ledge lands its blow on the floor', !!ledge && !!slamAt && slamAt.y < 0.5, JSON.stringify({ ...ledge, kongoYAtHit: slamAt?.y ?? null }));
 
 // ARACHNE: hunter drones, web mines that dig in, a snare net that pins
 await start('arachne');
@@ -240,6 +316,28 @@ const dropped = await waitFor(() => page.evaluate(() => {
   return p ? +p.pos.y.toFixed(2) : null;
 }), 4000, 'mine settled');
 check('a mine that hits a wall drops to the ground', dropped !== null && dropped < 1, JSON.stringify({ y: dropped }));
+
+// ...and a wall stops a mine from going off at all: one at the foot of AQUA HARBOR's middle wall stays
+// quiet for a VR flush against the far face, well inside its trigger range
+await place(40);
+const walledMine = await page.evaluate(() => {
+  const s = window.__vo.app.screen;
+  const [a, b] = s.mechs;
+  s.world.projectiles.clear();
+  const wall = s.world.arena.boxes.find((bx) => bx.max.x - bx.min.x > 30 && bx.max.z - bx.min.z <= 6 && bx.max.y >= 6 && bx.min.z > 0);
+  if (!wall) return null;
+  b.pos.set(0, 0, wall.max.z + b.spec.radius + 0.1); b.vel.set(0, 0, 0); b.hp = b.spec.hp; b.state = 'ground'; b.invuln = 0;
+  const at = b.pos.clone().set(0, 2, wall.min.z - 0.5);
+  s.world.projectiles.spawn(a, { kind: 'mine', pos: at, vel: at.clone().set(0, -6, 0), radius: 0.9, damage: 80, knock: 'down', gravity: 42, splash: 7.5, life: 10, stick: true, trigger: 6.5, arm: 0.35 });
+  return { gap: +(b.pos.z - at.z).toFixed(1), reach: +(6.5 + b.spec.radius * 0.8).toFixed(1) };
+});
+await sleep(1500);
+const behindWall2 = await page.evaluate(() => {
+  const s = window.__vo.app.screen;
+  const m = s.world.projectiles.list.find((p) => p.kind === 'mine');
+  return { planted: !!m?.stuck, hurt: Math.round(s.mechs[1].spec.hp - s.mechs[1].hp) };
+});
+check('a mine does not go off through a wall', !!walledMine && walledMine.gap < walledMine.reach && behindWall2.planted && behindWall2.hurt === 0, JSON.stringify({ ...walledMine, ...behindWall2 }));
 
 // once a round is decided nothing can hurt anyone: the winner can't be shot down by stray drones
 const decided = await page.evaluate(() => {

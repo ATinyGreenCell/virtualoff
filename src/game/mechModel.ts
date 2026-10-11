@@ -153,6 +153,7 @@ interface Mats {
 
 function makeMats(p: Palette): Mats {
   const lam = (c: number) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+  // additive glow: order-free, so both faces go in one pass (three draws double-sided transparents twice otherwise)
   const add = (c: number, opacity = 1) =>
     new THREE.MeshBasicMaterial({
       color: c,
@@ -161,6 +162,7 @@ function makeMats(p: Palette): Mats {
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
+      forceSinglePass: true,
       fog: false,
     });
   return {
@@ -216,6 +218,8 @@ export class MechModel {
   readonly flames: THREE.Object3D[] = [];
   readonly hipBase: number;
   private cur = zeroJoints();
+  /** the knockdown weight as the hips feel it: eased like the joints, so a fall doesn't drop the body into the floor */
+  private downW = 0;
   private tgt = zeroJoints();
   private flash = 0;
   private time = Math.random() * 10;
@@ -1160,7 +1164,8 @@ export class MechModel {
     const planted = F.ankleH + F.hipDrop + Math.max(extL, extR);
     const g = (1 - a) * (1 - d);
     let hipY = lerp(this.hipBase + 0.45 * d - 0.15 * a, planted, g);
-    hipY = lerp(hipY, 1.0, p.down);
+    this.downW = damp(this.downW, p.down, lambda, dt);
+    hipY = lerp(hipY, 1.0, this.downW);
 
     this.hips.position.y = hipY;
     this.hips.rotation.set(cur.hipsX, 0, cur.hipsZ);

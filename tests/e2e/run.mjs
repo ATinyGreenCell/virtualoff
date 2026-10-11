@@ -16,8 +16,8 @@ const PORT = 5199;
 
 const noErrors = (o) => /--- errors ---\s*\nnone/.test(o);
 const TESTS = [
-  { name: 'versus', file: 'versus.mjs', est: 65, pass: (o) => /second match started: true/.test(o) && /guest reached title: true/.test(o) && /guest saw the new kit: \{"kinds":\[[^\]]*"mine"[^\]]*"net"[^\]]*"orb"[^\]]*\],"snared":[1-9]/.test(o) && noErrors(o) },
-  { name: 'outage', file: 'outage.mjs', est: 60, pass: (o) => /\(FROZEN\)/.test(o) && /lost\/lost/.test(o) && noErrors(o) },
+  { name: 'versus', file: 'versus.mjs', est: 70, pass: (o) => /second match started: true/.test(o) && /guest moves in the rematch: true/.test(o) && /rematch keeps the picks: true/.test(o) && /score host 2 - 1 guest 1 - 2/.test(o) && /guest reached title: true/.test(o) && /host leaves the notice with ENTER: true/.test(o) && /guest saw the new kit: \{"kinds":\[[^\]]*"mine"[^\]]*"net"[^\]]*"orb"[^\]]*\],"snared":[1-9]/.test(o) && noErrors(o) },
+  { name: 'outage', file: 'outage.mjs', est: 70, pass: (o) => /frozen rival: host froze in [0-3]\.\d s, resumed: true/.test(o) && /\(FROZEN\)/.test(o) && /lost\/lost/.test(o) && noErrors(o) },
   { name: 'net-loss', file: 'net-loss.mjs', est: 45, pass: (o) => (o.match(/OK \(none lost\)/g) || []).length === 2 && /resumed: true/.test(o) && noErrors(o) },
   { name: 'cpu-vs-cpu', file: 'cpu-vs-cpu.mjs', args: ['jebe', 'hard'], est: 45, pass: (o) => /"phase":"result"/.test(o) && /no errors/.test(o) },
   { name: 'guest-input', file: 'guest-input.mjs', est: 40, pass: (o) => /dashPressed frames 3 \| guest dash edges sent 3/.test(o) && noErrors(o) },
@@ -33,7 +33,8 @@ const TESTS = [
   { name: 'split-vs', file: 'local.mjs', args: ['versus'], est: 75, pass: (o) => /local OK/.test(o) && noErrors(o) },
   { name: 'split-coop', file: 'local.mjs', args: ['coop'], est: 40, pass: (o) => /local OK/.test(o) && noErrors(o) },
   { name: 'split-edge', file: 'local.mjs', args: ['edges'], est: 110, pass: (o) => /local OK/.test(o) && noErrors(o) },
-  { name: 'roster', file: 'roster.mjs', est: 45, pass: (o) => /roster OK/.test(o) && noErrors(o) },
+  { name: 'roster', file: 'roster.mjs', est: 55, pass: (o) => /roster OK/.test(o) && noErrors(o) },
+  { name: 'menus', file: 'menus.mjs', est: 25, pass: (o) => /menus OK/.test(o) && noErrors(o) },
 ].filter((t) => !only || only.includes(t.name));
 
 async function startServer() {

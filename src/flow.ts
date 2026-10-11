@@ -190,7 +190,7 @@ export class Flow {
   // ------------------------------------------------------------------ versus
 
   /** Open the versus lobby: fresh (host/join choice), joining a code, or back with a live link. */
-  versus(opts: { link?: NetLink; joinCode?: string } = {}) {
+  versus(opts: { link?: NetLink; joinCode?: string; pick?: MechId } = {}) {
     this.app.setScreen(new VersusScreen(this.app, this, opts));
   }
 
@@ -214,7 +214,8 @@ export class Flow {
           net: { link, role: link.role },
         },
         (r) => {
-          if (r === 'rematch' && link.connected) this.versus({ link });
+          // a rematch goes back to the lobby with your VR still picked
+          if (r === 'rematch' && link.connected) this.versus({ link, pick: link.role === 'host' ? mech0 : mech1 });
           else {
             link.close();
             this.title();

@@ -250,8 +250,13 @@ function barrierTexture() {
 function fadeMats(mats: (THREE.MeshLambertMaterial | THREE.MeshBasicMaterial)[], fade: number) {
   const solid = fade > 0.995;
   for (const m of mats) {
-    m.transparent = !solid;
-    m.depthWrite = solid;
+    if (m.transparent === solid) {
+      // see-through is a different shader (the solid one forces alpha to 1): three only switches on
+      // needsUpdate. Both are compiled at load, so this is a cache lookup, not a compile.
+      m.transparent = !solid;
+      m.depthWrite = solid;
+      m.needsUpdate = true;
+    }
     m.opacity = fade;
   }
 }
@@ -480,6 +485,7 @@ export class Arena {
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
+      forceSinglePass: true,
       fog: false,
     });
     for (let i = 0; i < 4; i++) {
@@ -801,6 +807,7 @@ export class Arena {
       for (const m of o.mats) {
         m.transparent = on;
         m.depthWrite = !on;
+        m.needsUpdate = true;
       }
     }
   }

@@ -37,6 +37,21 @@ await waitFor(async () => (await scr(host)).phase === 'fight' && (await scr(gues
 const linkState = (p) => p.evaluate(() => { const l = window.__vo.app.screen.net; return { status: l.status, rt: l.rt?.readyState ?? null, rtReady: l.rtReady }; });
 console.log('channels   host', JSON.stringify(await linkState(host)), '| guest', JSON.stringify(await linkState(guest)));
 
+// ---- 0) the guest's page freezes (its connection stays up, so WebRTC sees nothing wrong): the host
+// freezes the match within a couple of seconds instead of fighting on, and resumes when the guest wakes
+const gdbg = await guest.createCDPSession();
+await gdbg.send('Debugger.enable');
+const hostFrozen = () => host.evaluate(() => !!document.querySelector('.overlay.reconnect'));
+const tf = Date.now();
+await gdbg.send('Debugger.pause');
+const froze = await waitFor(hostFrozen, 6000);
+const frozeIn = (Date.now() - tf) / 1000;
+await sleep(2500);
+await gdbg.send('Debugger.resume');
+const resumed = await waitFor(async () => !(await hostFrozen()), 6000);
+await gdbg.send('Debugger.disable');
+console.log(`frozen rival: host froze ${froze ? `in ${frozeIn.toFixed(1)} s` : 'NOT'}, resumed: ${!!resumed}`);
+
 // ---- outage the peers can't immediately repair: block the guest's signaling (relays) while the link is down
 const gcdp = await guest.createCDPSession();
 const offline = (on) => gcdp.send('Network.emulateNetworkConditions', { offline: on, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });

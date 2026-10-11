@@ -456,7 +456,8 @@ export class Mech {
     this.dashShot = false;
     if (!this.spend(this.spec.qbCost)) {
       // out of EN: the ground boost itself is free, the burst isn't
-      if (this.isPlayer) w.sound('empty', this.pos, 0.5);
+      // the empty click is for this screen's pilot only (never mirrored to a versus rival)
+      if (this.isPlayer) w.visual(() => w.sound('empty', this.pos, 0.5));
       if (!air) this.setState('dash');
       return;
     }
@@ -654,16 +655,18 @@ export class Mech {
       this.lockedOn
     ) {
       this.action = makeMeleeAction(this, slot);
+      this.action.target = tgt;
       if (this.state === 'dash') this.setState('ground');
       return true;
     }
     const def = this.spec.weapons[slot];
     if (this.gauges[slot] < def.cost - 1e-4) {
-      if (this.isPlayer) w.sound('empty', this.pos, 0.6);
+      if (this.isPlayer) w.visual(() => w.sound('empty', this.pos, 0.6));
       return false;
     }
     this.gauges[slot] -= def.cost;
     this.action = makeFireAction(this, slot, variant);
+    this.action.target = tgt;
     this.action.moving = variant === 'ground' && Math.hypot(this.vel.x, this.vel.z) > 4;
     if (this.state === 'dash' && !this.action.keepDash) this.setState('ground');
     return true;
@@ -674,7 +677,7 @@ export class Mech {
     a.t += dt;
     if (a.lunge) {
       if (a.t < a.lunge.until) {
-        const tgt = this.target;
+        const tgt = a.target ?? this.target;
         _v.set(tgt.pos.x - this.pos.x, 0, tgt.pos.z - this.pos.z);
         const d = _v.length();
         const stopAt = this.spec.radius + tgt.spec.radius + 1.0;
@@ -689,7 +692,7 @@ export class Mech {
       }
     }
     if (a.hitWindow && !a.hasHit && a.t >= a.hitWindow[0] && a.t <= a.hitWindow[1]) {
-      const tgt = this.target;
+      const tgt = a.target ?? this.target;
       const d = hdist(this.pos, tgt.pos);
       const reach = this.spec.radius + tgt.spec.radius + 3.6;
       forwardOf(this.yaw, _f);
@@ -725,7 +728,9 @@ export class Mech {
   // ------------------------------------------------------------------ physics
 
   private integrate(dt: number, w: World) {
-    const airborne = this.pos.y > this.groundY + 0.01 || this.vel.y > 0;
+    // no slack above the floor: standing mechs sit exactly on it, and a fall that stopped a hair short
+    // would otherwise hang there in the air state, never touching down
+    const airborne = this.pos.y > this.groundY || this.vel.y > 0;
     if (airborne) {
       let g = this.spec.gravity;
       if (this.state === 'airdash') g *= this.qbT > 0 ? 0.15 : 0.25;
@@ -783,6 +788,8 @@ export class Mech {
     }
     if (this.state === 'air' || this.state === 'airdash') {
       // touch down at full speed — only a hard fall costs a beat — and keep boosting if DASH is held
+      // (a fresh boost: the one shot an air boost allows doesn't use up the ground boost's)
+      this.dashShot = false;
       const hard = impact > this.spec.jumpVel * HARD_LANDING;
       if (hard) {
         this.setState('land');
@@ -948,7 +955,7 @@ export class Mech {
         case 'punchL':
           p.punchW = fade;
           p.punchL = u;
-          // the fist leaves the arm when it fires (0.2 s in) and is back once the punch is over
+          // the fist leaves the arm when it fires (0.2 s in)
           p.fistOut = a.t > 0.2 ? 1 : 0;
           break;
         case 'slam':
@@ -963,6 +970,8 @@ export class Mech {
       }
       if (a.charge && a.t >= a.charge[0] && a.t <= a.charge[1]) p.charge = (a.t - a.charge[0]) / (a.charge[1] - a.charge[0]);
     }
+    // ...and stays off it until the rocket fist it became is spent (the versus guest mirrors the fist too)
+    if (this.model.fistL && w.projectiles.inFlight(this, 'fist')) p.fistOut = 1;
     const canAim = st === 'ground' || st === 'air' || st === 'dash' || st === 'airdash' || st === 'land';
     if (canAim && a?.pose !== 'aimR') p.aimR = Math.max(p.aimR, Math.min(1, this.aimHold / 0.25));
     p.recoil = Math.max(0, p.recoil - dt * 6);
@@ -1130,6 +1139,8 @@ export class Mech {
 
   /** Guest: animate from the adopted state — no rules, no physics. */
   puppet(dt: number, w: World) {
+    // the floor under it (a block top, maybe), so the pose can tell standing from airborne
+    this.groundY = w.arena.groundAt(this.pos.x, this.pos.z, this.spec.radius, this.pos.y + 0.1);
     if (this.netExploded && !this.exploded) {
       this.exploded = true;
       this.centerInto(_p);

@@ -84,9 +84,10 @@ body {
   animation: blink 1s steps(2, start) infinite;
 }
 
+/* opacity, not visibility: a blinking prompt that is also a button stays clickable while it's dark */
 @keyframes blink {
   to {
-    visibility: hidden;
+    opacity: 0;
   }
 }
 
@@ -959,6 +960,26 @@ body {
 .controls-panel {
   background: rgba(4, 6, 24, 0.9);
   z-index: 5;
+  /* taller than a phone held sideways: scroll (centered when it fits) */
+  justify-content: flex-start;
+  overflow-y: auto;
+}
+
+.controls-panel > :first-child {
+  margin-top: auto;
+}
+
+.controls-panel > :last-child {
+  margin-bottom: auto;
+}
+
+.ctl-touch {
+  display: none;
+}
+
+body.touch .ctl-touch {
+  display: block;
+  order: -1;
 }
 
 .ctl-cols {
@@ -1079,6 +1100,10 @@ body {
   left: 5vw;
   top: 24vh;
   width: min(430px, 44vw);
+}
+
+/* the name confirms (as does a second tap on the chosen chip) */
+.sel-name {
   cursor: pointer;
 }
 
@@ -1178,7 +1203,10 @@ body {
   left: 50%;
   transform: translateX(-50%);
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 12px;
+  width: max-content;
   max-width: 96vw;
 }
 
@@ -1208,7 +1236,7 @@ body {
   font-size: 40px;
   color: var(--yellow);
   cursor: pointer;
-  padding: 10px;
+  padding: 16px 20px;
   animation: nudge 0.8s ease-in-out infinite alternate;
   text-shadow: 0 0 12px rgba(255, 210, 26, 0.7);
 }
@@ -1240,6 +1268,105 @@ body {
   font-size: 13px;
   letter-spacing: 3px;
   opacity: 0.8;
+}
+
+.sel-footer .taps,
+body.touch .sel-footer .keys {
+  display: none;
+}
+
+body.touch .sel-footer .taps {
+  display: inline;
+}
+
+/* shorter screens (720p, big text): a little tighter */
+@media (max-height: 760px) {
+  .sel-info {
+    top: 21vh;
+  }
+  .sel-name {
+    font-size: clamp(48px, min(9vw, 12vh), 104px);
+  }
+  .sel-blurb {
+    margin: 6px 0 10px;
+  }
+  .sel-stats {
+    margin-bottom: 10px;
+  }
+}
+
+/* phones on their side, small windows: the essentials only, between the header and the chips */
+@media (max-height: 600px) {
+  .sel-header {
+    top: 3vh;
+  }
+  .sel-kicker {
+    font-size: 10px;
+    letter-spacing: 4px;
+  }
+  .sel-title {
+    font-size: clamp(22px, 8vh, 48px);
+  }
+  .sel-timer b {
+    font-size: clamp(30px, 10vh, 58px);
+  }
+  .sel-info {
+    top: 21vh;
+    bottom: auto;
+    width: min(440px, 62vw);
+  }
+  .sel-code {
+    font-size: 10px;
+  }
+  .sel-name {
+    font-size: clamp(26px, 10vh, 60px);
+  }
+  .sel-blurb {
+    display: none;
+  }
+  .sel-stats {
+    gap: 3px;
+    margin: 4px 0 6px;
+  }
+  .stat {
+    font-size: 10px;
+  }
+  .stat span {
+    width: 56px;
+  }
+  .stat b,
+  .stat u {
+    width: 18px;
+    height: 7px;
+  }
+  .sel-weapons {
+    grid-template-columns: auto auto;
+    gap: 2px 16px;
+    font-size: 11px;
+    letter-spacing: 1px;
+  }
+  .sel-weapons em {
+    min-width: 0;
+    margin-right: 6px;
+  }
+  .sel-roster {
+    bottom: 9vh;
+    gap: 6px;
+  }
+  .chip {
+    font-size: 13px;
+    padding: 4px 10px;
+    letter-spacing: 1px;
+  }
+  /* no room beside the text: the chips (tap) and left/right do the choosing */
+  .sel-arrow {
+    display: none;
+  }
+  .sel-footer {
+    bottom: 1.5vh;
+    font-size: 10px;
+    letter-spacing: 2px;
+  }
 }
 
 .select-screen.chosen .sel-arrow,
@@ -1338,13 +1465,42 @@ body {
   .controls-hint {
     display: none;
   }
+  .sel-title {
+    font-size: clamp(22px, 7.5vw, 66px);
+  }
+  .sel-kicker {
+    font-size: 10px;
+    letter-spacing: 3px;
+  }
+  .sel-timer b {
+    font-size: 40px;
+  }
+  /* clear of the chips, which wrap onto two rows on a phone held upright */
   .sel-info {
     width: 88vw;
     top: auto;
-    bottom: 16vh;
+    bottom: 19vh;
+  }
+  .sel-arrow {
+    top: 22vh;
   }
   .sel-arrow.left {
     left: 3vw;
+  }
+}
+
+/* small and on its side (a phone): keep the compact panel up top, beside the model */
+@media (max-width: 760px) and (max-height: 600px) {
+  .sel-title {
+    font-size: clamp(22px, 8vh, 48px);
+  }
+  .sel-timer b {
+    font-size: clamp(30px, 10vh, 58px);
+  }
+  .sel-info {
+    top: 21vh;
+    bottom: auto;
+    width: min(440px, 62vw);
   }
 }
 
@@ -1936,4 +2092,16 @@ body {
 
 .xbox-hint b {
   color: #a8ffa8;
+}
+
+/* a click that can't do anything (browsing controls): point at the way out */
+.xbox-hint.nudge {
+  animation: xbox-nudge 0.5s ease-out 2;
+}
+
+@keyframes xbox-nudge {
+  30% {
+    transform: scale(1.06);
+    background: rgba(40, 120, 40, 0.95);
+  }
 }

@@ -1,7 +1,9 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { clamp, forwardOf, hdist, rand, rotateToward, segSegDist2 } from '../core/math';
 import { glowTexture } from '../render/textures';
 import { POSES, PROJ_KINDS, r1, r2, r3, type BeamSnap, type ProjSnap } from '../net/protocol';
+import { HALF } from './arena';
 import type { Mech } from './mech';
 import type { MechId, Slot } from './specs';
 import type { World } from './world';
@@ -62,6 +64,8 @@ export interface Action {
   dive?: boolean;
   /** runs once if the mech touches down while this action is on (an air slam lands its blow) */
   onLand?: (m: Mech, w: World) => void;
+  /** who the attack went for, fixed when it starts: a co-op boss switching targets doesn't swing a lunge or a beam already under way */
+  target?: Mech;
   /** fired while walking: the mech keeps moving but the shot guides less than a planted shot */
   moving?: boolean;
   events: ActionEvent[];
@@ -75,6 +79,8 @@ export interface Projectile {
   id: number;
   kind: ProjKind;
   owner: Mech;
+  /** what it homes on: whoever its owner was targeting when it was fired (the owner's current one once that's down) */
+  target: Mech;
   pos: THREE.Vector3;
   prev: THREE.Vector3;
   vel: THREE.Vector3;
@@ -143,6 +149,18 @@ const _d = new THREE.Vector3();
 const _e = new THREE.Vector3();
 const _want = new THREE.Vector3();
 const _dir = new THREE.Vector3();
+const _blast = new THREE.Vector3();
+const _sightA = new THREE.Vector3();
+const _sightB = new THREE.Vector3();
+
+/** Can a blast at `from` (raised by `lift`) reach mech `m`? Walls and blocks shield whatever is behind them. */
+function exposed(from: THREE.Vector3, lift: number, m: Mech, w: World) {
+  _sightA.set(from.x, from.y + lift, from.z);
+  if (w.arena.lineOfSight(_sightA, m.centerInto(_sightB))) return true;
+  // a head showing over a low block is enough
+  _sightB.set(m.pos.x, m.pos.y + m.spec.height - 0.6, m.pos.z);
+  return w.arena.lineOfSight(_sightA, _sightB);
+}
 const UP = new THREE.Vector3(0, 1, 0);
 
 let nextId = 1;
@@ -180,6 +198,8 @@ export class Projectiles {
   private pools = new Map<string, THREE.Object3D[]>();
   private geos: THREE.BufferGeometry[] = [];
   private mats = new Set<THREE.Material>();
+  private readonly shapes = new Map<string, THREE.BufferGeometry>();
+  private readonly looks = new Map<string, THREE.Material>();
 
   constructor(private readonly scene: THREE.Scene) {}
 
@@ -219,69 +239,93 @@ export class Projectiles {
     return g;
   }
 
+  /** One geometry per shape, shared by every pooled visual (uploaded once, not once per shot). */
+  private shape(key: string, make: () => THREE.BufferGeometry) {
+    let g = this.shapes.get(key);
+    if (!g) {
+      g = this.geo(make());
+      this.shapes.set(key, g);
+    }
+    return g;
+  }
+
+  /** One material per look (kind of surface and color), shared the same way. */
+  private look<M extends THREE.Material>(key: string, make: () => M): M {
+    let m = this.looks.get(key) as M | undefined;
+    if (!m) {
+      m = make();
+      this.looks.set(key, m);
+    }
+    return m;
+  }
+
   private makeVisual(kind: ProjKind, color: number): THREE.Object3D {
     const g = new THREE.Group();
+    const add = (c: number, opacity = 1) => this.look(`add:${c}:${opacity}`, () => additive(c, opacity));
+    const lam = (c: number) => this.look(`lam:${c}`, () => new THREE.MeshLambertMaterial({ color: c, flatShading: true }));
+    const glow = (c: number, size: number) => {
+      const sp = new THREE.Sprite(
+        this.look(
+          `glow:${c}`,
+          () => new THREE.SpriteMaterial({ map: glowTexture(), color: c, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }),
+        ),
+      );
+      sp.scale.set(size, size, 1);
+      return sp;
+    };
     switch (kind) {
       case 'bolt': {
-        const core = new THREE.Mesh(this.geo(new THREE.CylinderGeometry(0.16, 0.16, 3.4, 6).rotateX(Math.PI / 2)), additive(0xffffff));
-        const halo = new THREE.Mesh(this.geo(new THREE.CylinderGeometry(0.42, 0.2, 4.6, 8).rotateX(Math.PI / 2)), additive(color, 0.75));
-        g.add(core, halo, glowSprite(color, 3.2));
+        const core = new THREE.Mesh(this.shape('bolt-core', () => new THREE.CylinderGeometry(0.16, 0.16, 3.4, 6).rotateX(Math.PI / 2)), add(0xffffff));
+        const halo = new THREE.Mesh(this.shape('bolt-halo', () => new THREE.CylinderGeometry(0.42, 0.2, 4.6, 8).rotateX(Math.PI / 2)), add(color, 0.75));
+        g.add(core, halo, glow(color, 3.2));
         break;
       }
       case 'shell': {
-        g.add(new THREE.Mesh(this.geo(new THREE.SphereGeometry(0.55, 8, 6)), additive(0xfff0c0)));
-        const tail = new THREE.Mesh(this.geo(new THREE.ConeGeometry(0.5, 3, 8).rotateX(-Math.PI / 2).translate(0, 0, -1.5)), additive(color, 0.6));
-        g.add(tail, glowSprite(color, 4.2));
+        g.add(new THREE.Mesh(this.shape('shell', () => new THREE.SphereGeometry(0.55, 8, 6)), add(0xfff0c0)));
+        const tail = new THREE.Mesh(this.shape('shell-tail', () => new THREE.ConeGeometry(0.5, 3, 8).rotateX(-Math.PI / 2).translate(0, 0, -1.5)), add(color, 0.6));
+        g.add(tail, glow(color, 4.2));
         break;
       }
       case 'bomb': {
-        g.add(new THREE.Mesh(this.geo(new THREE.IcosahedronGeometry(0.75, 0)), new THREE.MeshLambertMaterial({ color: 0x30343f, flatShading: true })));
-        const blink = glowSprite(color, 3.2);
+        g.add(new THREE.Mesh(this.shape('bomb', () => new THREE.IcosahedronGeometry(0.75, 0)), lam(0x30343f)));
+        const blink = glow(color, 3.2);
         blink.name = 'blink';
         g.add(blink);
         break;
       }
       case 'hyper': {
-        g.add(new THREE.Mesh(this.geo(new THREE.IcosahedronGeometry(1.0, 1)), additive(0xffffff)));
-        g.add(new THREE.Mesh(this.geo(new THREE.IcosahedronGeometry(1.9, 1)), additive(color, 0.55)));
-        const ring = new THREE.Mesh(this.geo(new THREE.TorusGeometry(2.4, 0.18, 6, 24)), additive(color, 0.8));
+        g.add(new THREE.Mesh(this.shape('hyper-core', () => new THREE.IcosahedronGeometry(1.0, 1)), add(0xffffff)));
+        g.add(new THREE.Mesh(this.shape('hyper-shell', () => new THREE.IcosahedronGeometry(1.9, 1)), add(color, 0.55)));
+        const ring = new THREE.Mesh(this.shape('hyper-ring', () => new THREE.TorusGeometry(2.4, 0.18, 6, 24)), add(color, 0.8));
         ring.name = 'ring';
-        g.add(ring, glowSprite(color, 10));
+        g.add(ring, glow(color, 10));
         break;
       }
       case 'missile': {
-        g.add(
-          new THREE.Mesh(
-            this.geo(new THREE.CylinderGeometry(0.22, 0.28, 1.6, 6).rotateX(Math.PI / 2)),
-            new THREE.MeshLambertMaterial({ color: 0xe8e4d8, flatShading: true }),
-          ),
-        );
-        g.add(new THREE.Mesh(this.geo(new THREE.ConeGeometry(0.22, 0.6, 6).rotateX(Math.PI / 2).translate(0, 0, 1.1)), new THREE.MeshLambertMaterial({ color: 0xd8382c, flatShading: true })));
-        const flame = glowSprite(color, 2.4);
+        g.add(new THREE.Mesh(this.shape('missile', () => new THREE.CylinderGeometry(0.22, 0.28, 1.6, 6).rotateX(Math.PI / 2)), lam(0xe8e4d8)));
+        g.add(new THREE.Mesh(this.shape('missile-tip', () => new THREE.ConeGeometry(0.22, 0.6, 6).rotateX(Math.PI / 2).translate(0, 0, 1.1)), lam(0xd8382c)));
+        const flame = glow(color, 2.4);
         flame.position.z = -1.1;
         g.add(flame);
         break;
       }
       case 'orb': {
         // hunter drone: a bright core in a shell, a spinning ring around it
-        g.add(new THREE.Mesh(this.geo(new THREE.IcosahedronGeometry(0.45, 0)), additive(0xffffff)));
-        g.add(new THREE.Mesh(this.geo(new THREE.IcosahedronGeometry(0.85, 0)), additive(color, 0.55)));
-        const ring = new THREE.Mesh(this.geo(new THREE.TorusGeometry(1.15, 0.08, 4, 16)), additive(color, 0.85));
+        g.add(new THREE.Mesh(this.shape('orb-core', () => new THREE.IcosahedronGeometry(0.45, 0)), add(0xffffff)));
+        g.add(new THREE.Mesh(this.shape('orb-shell', () => new THREE.IcosahedronGeometry(0.85, 0)), add(color, 0.55)));
+        const ring = new THREE.Mesh(this.shape('orb-ring', () => new THREE.TorusGeometry(1.15, 0.08, 4, 16)), add(color, 0.85));
         ring.name = 'ring';
-        g.add(ring, glowSprite(color, 3));
+        g.add(ring, glow(color, 3));
         break;
       }
       case 'mine': {
-        // a squat disc with three claws and a blinking light
-        g.add(new THREE.Mesh(this.geo(new THREE.CylinderGeometry(0.95, 1.1, 0.35, 8)), new THREE.MeshLambertMaterial({ color: 0x2a2c34, flatShading: true })));
-        const clawMat = new THREE.MeshLambertMaterial({ color: 0x4a4d58, flatShading: true });
-        const clawGeo = this.geo(new THREE.BoxGeometry(0.18, 0.12, 0.9).translate(0, -0.05, 0.95));
-        for (let i = 0; i < 3; i++) {
-          const claw = new THREE.Mesh(clawGeo, clawMat);
-          claw.rotation.y = (i / 3) * Math.PI * 2;
-          g.add(claw);
-        }
-        const blink = glowSprite(color, 2.6);
+        // a squat disc with three claws (one mesh) and a blinking light
+        g.add(new THREE.Mesh(this.shape('mine', () => new THREE.CylinderGeometry(0.95, 1.1, 0.35, 8)), lam(0x2a2c34)));
+        const claws = this.shape('mine-claws', () =>
+          mergeGeometries([0, 1, 2].map((i) => new THREE.BoxGeometry(0.18, 0.12, 0.9).translate(0, -0.05, 0.95).rotateY((i / 3) * Math.PI * 2))),
+        );
+        g.add(new THREE.Mesh(claws, lam(0x4a4d58)));
+        const blink = glow(color, 2.6);
         blink.position.y = 0.35;
         blink.name = 'blink';
         g.add(blink);
@@ -289,24 +333,20 @@ export class Projectiles {
       }
       case 'fist': {
         // rocket fist: knuckles first, a flame behind
-        g.add(new THREE.Mesh(this.geo(new THREE.BoxGeometry(1.25, 1.15, 1.4)), new THREE.MeshLambertMaterial({ color: 0x3c3f4a, flatShading: true })));
-        g.add(new THREE.Mesh(this.geo(new THREE.BoxGeometry(1.3, 0.5, 0.4).translate(0, 0.15, 0.75)), new THREE.MeshLambertMaterial({ color, flatShading: true })));
-        const flame = glowSprite(0xffb04a, 3);
+        g.add(new THREE.Mesh(this.shape('fist', () => new THREE.BoxGeometry(1.25, 1.15, 1.4)), lam(0x3c3f4a)));
+        g.add(new THREE.Mesh(this.shape('fist-knuckles', () => new THREE.BoxGeometry(1.3, 0.5, 0.4).translate(0, 0.15, 0.75)), lam(color)));
+        const flame = glow(0xffb04a, 3);
         flame.position.z = -1.2;
         g.add(flame);
         break;
       }
       case 'net': {
-        // snare net: a spinning hexagon strung across with glowing strands
-        const hex = new THREE.Mesh(this.geo(new THREE.TorusGeometry(1.9, 0.12, 4, 6)), additive(color, 0.9));
+        // snare net: a spinning hexagon strung across with glowing strands (one mesh)
+        const hex = new THREE.Mesh(this.shape('net', () => new THREE.TorusGeometry(1.9, 0.12, 4, 6)), add(color, 0.9));
         hex.name = 'ring';
-        const strandGeo = this.geo(new THREE.BoxGeometry(3.6, 0.08, 0.08));
-        for (let i = 0; i < 3; i++) {
-          const strand = new THREE.Mesh(strandGeo, additive(color, 0.7));
-          strand.rotation.z = (i / 3) * Math.PI;
-          hex.add(strand);
-        }
-        g.add(hex, glowSprite(color, 4.5));
+        const strands = this.shape('net-strands', () => mergeGeometries([0, 1, 2].map((i) => new THREE.BoxGeometry(3.6, 0.08, 0.08).rotateZ((i / 3) * Math.PI))));
+        hex.add(new THREE.Mesh(strands, add(color, 0.7)));
+        g.add(hex, glow(color, 4.5));
         break;
       }
     }
@@ -337,10 +377,16 @@ export class Projectiles {
     obj.userData.pool = key;
     obj.visible = true;
     this.scene.add(obj);
+    // a mech backed against the arena's edge has its gun poking through it: fire from just inside, or
+    // the shot would start beyond the barrier, never cross it, and sail off into the scenery
+    const lim = HALF - 0.3;
+    o.pos.x = clamp(o.pos.x, -lim, lim);
+    o.pos.z = clamp(o.pos.z, -lim, lim);
     const p: Projectile = {
       id: nextId++,
       kind: o.kind,
       owner,
+      target: owner.target,
       pos: o.pos.clone(),
       prev: o.pos.clone(),
       vel: o.vel.clone(),
@@ -374,6 +420,12 @@ export class Projectiles {
     this.list.push(p);
     owner.stats.shots++;
     return p;
+  }
+
+  /** Is one of `owner`'s projectiles of this kind still out? (a launched rocket fist is off the arm) */
+  inFlight(owner: Mech, kind: ProjKind) {
+    for (const p of this.list) if (p.alive && p.owner === owner && p.kind === kind) return true;
+    return false;
   }
 
   /** Versus host: every live projectile, compactly. */
@@ -413,6 +465,7 @@ export class Projectiles {
           id: st[0],
           kind,
           owner,
+          target: owner.target,
           pos: new THREE.Vector3(),
           prev: new THREE.Vector3(),
           vel: new THREE.Vector3(),
@@ -492,6 +545,11 @@ export class Projectiles {
     return b;
   }
 
+  /** The match froze (pause, a dropped link): silence the laser roar until the beams are drawn again. */
+  hushLoops() {
+    for (const b of this.beams) b.hush();
+  }
+
   stopBeamsOf(owner: Mech) {
     for (const b of this.beams) if (b.active && b.owner === owner) b.stop();
   }
@@ -506,7 +564,7 @@ export class Projectiles {
         continue;
       }
       p.prev.copy(p.pos);
-      const tgt = p.owner.target;
+      const tgt = p.target.alive ? p.target : p.owner.target;
       if (p.homing > 0 && p.age > p.homingDelay && tgt.alive) {
         const speed = p.vel.length();
         _dir.copy(p.vel).divideScalar(speed || 1);
@@ -541,16 +599,18 @@ export class Projectiles {
       }
       if (hitMech) {
         this.impact(p, w, hitMech);
+      } else if (p.stick && p.vel.x === 0 && p.vel.z === 0) {
+        // a mine that glanced off a wall falls straight down beside it, onto the floor or a block top
+        const gy = w.arena.groundAt(p.pos.x, p.pos.z, 0.5, p.prev.y + 0.3);
+        if (p.pos.y <= gy) {
+          p.pos.y = gy;
+          this.plant(p, w);
+        }
       } else if (tw >= 0) {
         p.pos.lerpVectors(p.prev, p.pos, tw);
         if (p.stick) {
           if (p.pos.y - w.arena.groundAt(p.pos.x, p.pos.z, 0.5, p.pos.y + 0.3) < 0.6) {
-            // a mine digs in where it lands
-            p.stuck = true;
-            p.stuckAt = p.age;
-            p.vel.set(0, 0, 0);
-            p.pos.y += 0.2;
-            w.fx.dust(p.pos, 4, w.dustColor, 1, 1.4);
+            this.plant(p, w);
           } else {
             // glanced off a wall (or the arena's edge): back off it and drop straight down
             _dir.set(p.vel.x, 0, p.vel.z).normalize();
@@ -558,19 +618,22 @@ export class Projectiles {
             p.vel.set(0, Math.min(0, p.vel.y), 0);
           }
         } else this.impact(p, w, null);
-      } else if (p.age > p.life) {
+      }
+      // nothing outlives its life, whatever it is caught on
+      if (p.alive && !p.stuck && p.age > p.life) {
         if (p.splash > 0) this.impact(p, w, null);
         else this.release(p);
       }
     }
 
-    // opposing projectiles cancel each other — big shots erase small ones
+    // opposing projectiles cancel each other — big shots erase small ones (a mine dug into the ground
+    // is out of it: shots pass over it rather than vanishing into it)
     for (let i = 0; i < this.list.length; i++) {
       const a = this.list[i];
-      if (!a.alive) continue;
+      if (!a.alive || a.stuck) continue;
       for (let j = i + 1; j < this.list.length; j++) {
         const b = this.list[j];
-        if (!b.alive || b.owner.team === a.owner.team) continue;
+        if (!b.alive || b.stuck || b.owner.team === a.owner.team) continue;
         const r = a.radius + b.radius;
         if (a.pos.distanceToSquared(b.pos) > r * r) continue;
         w.fx.flash(_d.addVectors(a.pos, b.pos).multiplyScalar(0.5), 0xffffff, 4, 0.15, true);
@@ -592,13 +655,23 @@ export class Projectiles {
     w.visual(() => this.updateVisuals(dt, w));
   }
 
+  /** A mine digs in where it lands. */
+  private plant(p: Projectile, w: World) {
+    p.stuck = true;
+    p.stuckAt = p.age;
+    p.vel.set(0, 0, 0);
+    p.pos.y += 0.2;
+    w.fx.dust(p.pos, 4, w.dustColor, 1, 1.4);
+  }
+
   /** An enemy close enough to set this mine off. */
   private enemyNear(p: Projectile, w: World) {
     for (const m of w.mechs) {
       if (m.team === p.owner.team || !m.alive || !m.hittable) continue;
       m.axis(_b, _c);
       const r = p.trigger + m.spec.radius * 0.8;
-      if (segSegDist2(p.pos, p.pos, _b, _c) < r * r) return true;
+      // close enough, and not behind a wall
+      if (segSegDist2(p.pos, p.pos, _b, _c) < r * r && exposed(p.pos, 1, m, w)) return true;
     }
     return false;
   }
@@ -671,6 +744,10 @@ export class Projectiles {
   private impact(p: Projectile, w: World, mech: Mech | null) {
     const pos = p.pos;
     if (p.splash > 0) {
+      // the blast's center, nudged back off whatever surface it burst on, so walls shield what's behind them
+      _blast.subVectors(p.prev, pos);
+      const back = _blast.length();
+      _blast.multiplyScalar(back > 1e-4 ? Math.min(0.5, back) / back : 0).add(pos);
       const sz = p.kind === 'hyper' ? 4 : 3;
       w.fx.explosion(pos, sz, p.kind === 'hyper' ? p.color : 0xffa040);
       w.sound(p.kind === 'hyper' ? 'explosionBig' : 'explosionSmall', pos);
@@ -683,7 +760,7 @@ export class Projectiles {
         const tt = clamp(_a.subVectors(pos, _b).dot(seg) / seg.lengthSq(), 0, 1);
         const closest = _a.copy(_b).addScaledVector(seg, tt);
         const dist = closest.distanceTo(pos) - m.spec.radius * 0.8;
-        if (m === mech || dist < p.splash) {
+        if (m === mech || (dist < p.splash && exposed(_blast, 0.3, m, w))) {
           const f = m === mech ? 1 : clamp(1 - Math.max(0, dist) / p.splash, 0.45, 1);
           const dir = new THREE.Vector3(m.pos.x - pos.x, 0, m.pos.z - pos.z);
           if (dir.lengthSq() < 1e-4) dir.set(p.vel.x, 0, p.vel.z);
@@ -833,7 +910,7 @@ export class Beam {
     }
     m.model.chest.getWorldPosition(this.origin);
     // track the target slowly — dodge sideways and it sweeps after you
-    const tgt = m.target;
+    const tgt = m.action.target ?? m.target;
     tgt.centerInto(_want).sub(this.origin).normalize();
     rotateToward(this.dir, _want, 0.42 * dt);
     m.beamYaw = Math.atan2(this.dir.x, this.dir.z);
@@ -859,6 +936,10 @@ export class Beam {
       w.fx.spray(_a, _d.copy(this.dir).negate(), 6, 0xffe0a0, 30);
     }
     if (hit) this.tick = 0.1;
+  }
+
+  hush() {
+    this.loop?.set({ volume: 0 });
   }
 
   /** Cosmetic side: geometry, flares, sparks, rumble and the looping roar. */
@@ -910,7 +991,9 @@ export function aimDir(m: Mech, from: THREE.Vector3, speed: number, lead: number
   _c.x += t.vel.x * time * lead;
   _c.z += t.vel.z * time * lead;
   _c.y += t.vel.y * time * lead * 0.4;
-  return out.subVectors(_c, from).normalize();
+  out.subVectors(_c, from);
+  // the target's center right at the muzzle (pressed up against it): straight ahead, never a dead stop
+  return out.lengthSq() > 1e-6 ? out.normalize() : forwardOf(m.yaw, out);
 }
 
 /** Spread a direction sideways by `angle` radians around the vertical axis. */
@@ -1465,7 +1548,19 @@ function kongoSlam(variant: Variant): Action {
     cancelAfterEvents: false,
     charge: [0, 0.42],
     armor: true,
-    events: [{ t: 0.48, run: quake }],
+    events: [
+      {
+        t: 0.48,
+        run: (m, w) => {
+          // slid off a ledge mid-slam: come straight down and land the blow, like the air slam
+          if (m.pos.y > m.groundY + 0.5 && m.action) {
+            m.action.dive = true;
+            m.action.onLand = quake;
+            m.vel.set(0, Math.min(m.vel.y, -62), 0);
+          } else quake(m, w);
+        },
+      },
+    ],
   });
 }
 
@@ -1647,18 +1742,19 @@ function arachneNet(variant: Variant): Action {
 
 // ------------------------------------------------------------------ dispatch
 
-type Arsenal = Record<Slot, (variant: Variant) => Action>;
+type Arsenal = Record<Slot, (variant: Variant, m: Mech) => Action>;
 
 const ARSENAL: Record<MechId, Arsenal> = {
   jebe: { rw: jebeRifle, lw: jebeBomb, cw: jebeHyper },
   fujin: { rw: fujinCannon, lw: fujinMissiles, cw: fujinLaser },
   kestrel: { rw: kestrelNeedles, lw: kestrelDarts, cw: kestrelLance },
-  kongo: { rw: (v) => (v === 'dash' ? kongoRam() : kongoScatter(v)), lw: kongoFist, cw: kongoSlam },
+  // the ram charges a locked-on target, like any melee; boosting with nobody ahead fires the scatter gun
+  kongo: { rw: (v, m) => (v === 'dash' && m.lockedOn ? kongoRam() : kongoScatter(v)), lw: kongoFist, cw: kongoSlam },
   arachne: { rw: arachneDrones, lw: arachneMines, cw: arachneNet },
 };
 
 export function makeFireAction(m: Mech, slot: Slot, variant: Variant): Action {
-  return ARSENAL[m.spec.id][slot](variant);
+  return ARSENAL[m.spec.id][slot](variant, m);
 }
 
 export function makeMeleeAction(m: Mech, slot: Slot): Action {

@@ -209,8 +209,16 @@ body.touch-battle .controls-hint {
   display: none;
 }
 
+/* the EN bar goes up with the gauges, out from under BOOST and LW */
+body.touch-battle .en {
+  bottom: auto;
+  top: 124px;
+  transform: translateX(-50%) scale(0.6);
+  transform-origin: top center;
+}
+
 body.touch-battle .status {
-  top: 140px;
+  top: 146px;
 }
 
 /* ---- portrait: ask for landscape ---- */

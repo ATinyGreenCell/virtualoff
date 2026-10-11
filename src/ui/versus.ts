@@ -1,5 +1,6 @@
 import { audio } from '../audio/audio';
 import type { App, Screen } from '../app';
+import type { MenuInput } from '../core/input';
 import type { Flow } from '../flow';
 import { MechModel, makePose } from '../game/mechModel';
 import { MECH_IDS, SPECS, type MechId, type StageId } from '../game/specs';
@@ -33,7 +34,8 @@ export class VersusScreen implements Screen {
   private heartbeat = 0;
   private t = 0;
   private models: [MechModel | null, MechModel | null] = [null, null];
-  private modelIds: [MechId | null, MechId | null] = [null, null];
+  /** what each hangar model shows: VR id and paint ('' = none) */
+  private modelKeys: [string, string] = ['', ''];
   private readonly pose = makePose();
   private readonly readyPose = makePose();
   private errorMsg = '';
@@ -43,8 +45,10 @@ export class VersusScreen implements Screen {
   constructor(
     private readonly app: App,
     private readonly flow: Flow,
-    opts: { link?: NetLink; joinCode?: string },
+    opts: { link?: NetLink; joinCode?: string; pick?: MechId },
   ) {
+    // back for a rematch: the VR you flew last
+    if (opts.pick && IDS.includes(opts.pick)) this.myPick = opts.pick;
     this.hangar = new Hangar(app.renderer.aspect, [-7.5, 7.5]);
     this.offResize = app.renderer.onResize(() => {
       this.hangar.cam.aspect = app.renderer.aspect;
@@ -357,14 +361,21 @@ export class VersusScreen implements Screen {
   update(dt: number) {
     this.t += dt;
     this.hangar.update(this.t);
-    const m = this.app.input.menu;
+    let m = this.app.input.menu;
     const typing = this.codeInput !== null && document.activeElement === this.codeInput;
-    if (!typing && !this.leaving) {
+    if (typing) {
+      // the keyboard belongs to the code box, but a controller (which can't type) still steers: any
+      // press of one takes it out of the box, back to the buttons
+      m = this.padMenu();
+      if (m.any) this.codeInput?.blur();
+    }
+    if (!this.leaving) {
       if (this.state === 'pick') {
         if (m.left) this.act('prev');
         if (m.right) this.act('next');
         if (m.confirm) this.act('ready');
-        if (m.back) this.act('leave');
+        // B takes back a READY first; only when you're not ready does it leave the room
+        if (m.back) this.act(this.myReady ? 'ready' : 'leave');
       } else {
         const btns = this.buttons();
         if ((m.up || m.down) && btns.length) {
@@ -407,21 +418,22 @@ export class VersusScreen implements Screen {
   private updateModels(dt: number) {
     const showRival = this.state === 'pick' && this.rivalPick !== null;
     const wanted: [MechId | null, MechId | null] = [this.myPick, showRival ? this.rivalPick : null];
+    // a mirror match paints the guest in the alternate colors, as the fight will
+    const mirror = wanted[0] === wanted[1];
+    const guestSide = this.link?.role === 'guest' ? 0 : 1;
     for (let i = 0; i < 2; i++) {
-      if (this.modelIds[i] !== wanted[i]) {
+      const id = wanted[i];
+      const alt = mirror && i === guestSide;
+      const key = id ? `${id}${alt ? ':alt' : ''}` : '';
+      if (this.modelKeys[i] !== key) {
         const old = this.models[i];
-        if (old) {
-          this.hangar.platforms[i].remove(old.root);
-          old.dispose();
-        }
-        const id = wanted[i];
-        const rivalAlt = i === 1 && id === this.myPick;
-        this.models[i] = id ? new MechModel(SPECS[id], rivalAlt ? SPECS[id].altPalette : SPECS[id].palette) : null;
+        if (old) this.hangar.retire(old);
+        this.models[i] = id ? new MechModel(SPECS[id], alt ? SPECS[id].altPalette : SPECS[id].palette) : null;
         if (this.models[i]) {
           this.models[i]!.root.position.y = 0.9;
           this.hangar.platforms[i].add(this.models[i]!.root);
         }
-        this.modelIds[i] = id;
+        this.modelKeys[i] = key;
       }
       const model = this.models[i];
       if (!model) continue;
@@ -432,6 +444,16 @@ export class VersusScreen implements Screen {
     const c = this.hangar.cam;
     c.position.set(0, 7, 33);
     c.lookAt(0, 4.2, 0);
+  }
+
+  /** Menu presses from the controllers alone (not the keyboard). */
+  private padMenu(): MenuInput {
+    const out: MenuInput = { up: false, down: false, left: false, right: false, confirm: false, back: false, pause: false, any: false };
+    for (const d of this.app.input.devices()) {
+      if (d.id === 'keys') continue;
+      for (const k of Object.keys(out) as (keyof MenuInput)[]) out[k] ||= d.menu[k];
+    }
+    return out;
   }
 
   render() {

@@ -9,7 +9,7 @@ const FIND_TIMEOUT_MS = 30_000;
 /** Snapshots dropped (not queued) once this many sends are still in flight — keeps latency bounded. */
 const MAX_INFLIGHT = 4;
 /** How long a dropped rival has to come back (Wi-Fi blip, app switch) before the match is given up. */
-const RECONNECT_GRACE_MS = GRACE_S ? GRACE_S * 1000 : 20_000;
+export const RECONNECT_GRACE_MS = GRACE_S ? GRACE_S * 1000 : 20_000;
 /** Stream id of the real-time channel both peers open on Trystero's connection (its own channel is auto-numbered from 0). */
 const RT_ID = 77;
 /** Never queue real-time packets behind a congested link: the next one supersedes them anyway. */
@@ -47,6 +47,11 @@ export class NetLink {
   onEvents: ((m: EventsMsg) => void) | null = null;
   /** while reconnecting: when the grace period runs out (performance.now ms) */
   reconnectDeadline = 0;
+  /**
+   * guest: sequence number of the last input sent. It lives as long as the link, so a rematch's inputs
+   * never look older than the last match's to the host (which drops anything it has already seen).
+   */
+  inputSeq = 0;
 
   private room: Room | null = null;
   private lb: ((m: LobbyMsg, target?: string) => void) | null = null;
@@ -100,6 +105,8 @@ export class NetLink {
     },
   ) {
     this.owner = owner;
+    // the last screen's inputs mustn't ride along into the next one's packets
+    this.sentInputs.length = 0;
     this.onStatus = h.onStatus ?? null;
     this.onLobby = h.onLobby ?? null;
     this.onInput = h.onInput ?? null;
@@ -163,6 +170,8 @@ export class NetLink {
       this.st = (m) => st.send(m, { target: this.peerId! });
       this.ev = (m) => void ev.send(m, { target: this.peerId! }).catch(() => undefined);
       room.onPeerJoin = (id) => this.lb?.({ t: 'hello', v: PROTOCOL, role: this.role }, id);
+      // closing the tab or leaving the page says goodbye, rather than leaving the rival to wait out the grace period
+      window.addEventListener('pagehide', this.onPageHide);
       room.onPeerLeave = (id) => {
         if (id === this.peerId) this.peerDropped();
       };
@@ -372,9 +381,12 @@ export class NetLink {
     return true;
   }
 
+  private readonly onPageHide = () => this.close();
+
   close() {
     if (this.closed) return;
     this.closed = true;
+    window.removeEventListener('pagehide', this.onPageHide);
     window.clearTimeout(this.findTimer);
     window.clearTimeout(this.graceTimer);
     window.clearInterval(this.pingTimer);

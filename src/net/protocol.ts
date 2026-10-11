@@ -60,6 +60,15 @@ export function unpackInput(m: InputMsg, edges: number, out: ControlFrame) {
 
 export const EDGE_MASK = JUMP_P | DASH_P | FIRE_LW | FIRE_RW | FIRE_CW;
 
+const axis = (v: number) => Math.max(-100, Math.min(100, Math.round(v)));
+
+/** A guest's input as the host will use it, or null for anything that isn't one (a mangled or tampered packet). */
+export function cleanInput(m: unknown): InputMsg | null {
+  if (!Array.isArray(m) || m.length < 5) return null;
+  for (let i = 0; i < 5; i++) if (typeof m[i] !== 'number' || !Number.isFinite(m[i])) return null;
+  return [Math.floor(m[0]), axis(m[1]), axis(m[2]), axis(m[3]), m[4] & 0xff];
+}
+
 // ------------------------------------------------------------------ state (host -> guest)
 
 /** Mech state, positional layout (see Mech.writeNet / readNet). */
@@ -91,6 +100,32 @@ export type SnapMsg = {
   b: BeamSnap[];
   e: NetEvent[];
 };
+
+const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
+
+/** Is this a snapshot the guest can draw? A mangled or hostile one is dropped like a lost packet. */
+export function validSnap(m: unknown): m is SnapMsg {
+  const s = m as SnapMsg | null;
+  return (
+    !!s &&
+    finite(s.ht) &&
+    finite(s.ph) &&
+    finite(s.pt) &&
+    finite(s.tl) &&
+    finite(s.rd) &&
+    Array.isArray(s.w) &&
+    s.w.length === 2 &&
+    s.w.every(finite) &&
+    Array.isArray(s.m) &&
+    s.m.length === 2 &&
+    s.m.every((x) => Array.isArray(x) && x.length >= 25 && x.every(finite)) &&
+    Array.isArray(s.p) &&
+    s.p.every((x) => Array.isArray(x) && x.length >= 10 && x.every(finite)) &&
+    Array.isArray(s.b) &&
+    s.b.every((x) => Array.isArray(x) && x.every(finite)) &&
+    Array.isArray(s.e)
+  );
+}
 
 export const PHASES = ['intro', 'ready', 'fight', 'finish', 'roundEnd', 'result'] as const;
 export const STATES = ['ground', 'dash', 'air', 'airdash', 'land', 'guard', 'stagger', 'down', 'getup', 'dead'] as const;

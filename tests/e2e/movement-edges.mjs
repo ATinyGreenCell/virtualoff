@@ -112,6 +112,23 @@ const res = await page.evaluate(() => {
   for (let i = 0; i < 15; i++) step({ moveX: i % 4 < 2 ? 1 : -1, moveY: 1, dash: i % 3 === 0, jump: i % 5 === 0 }, 1 / 15);
   r.hitchMaxSpeed = +maxSpeed.toFixed(1);
   r.qbSpeed = m.spec.qbSpeed;
+
+  // 8. a slow hover glide down to the floor always touches down, wherever its last step ends: from 40
+  //    heights a few mm apart, every one lands (it used to hang a hair above the floor in the air state)
+  let landed = 0;
+  for (let i = 0; i < 40; i++) {
+    place(0, 2 + i * 0.0137, 0, 0);
+    for (let k = 0; k < 240 && !(m.state === 'dash' && m.pos.y === 0); k++) step({ dash: k > 0 });
+    if (m.state === 'dash' && m.pos.y === 0) landed++;
+  }
+  r.hoverGlidesLanded = landed;
+  // and a VR left a hair above the floor with no fall speed comes down at once
+  place(0, 0, 0, 0);
+  m.state = 'air';
+  m.pos.y = 0.005;
+  m.vel.y = 0;
+  for (let i = 0; i < 5; i++) step();
+  r.hairAbove = { state: m.state, y: m.pos.y };
   r.allFinite = finite;
   return r;
 });
@@ -133,6 +150,9 @@ const ok =
   !res.afterReset.empty &&
   // a burst keeps half your sideways momentum, so the ceiling is ~1.12x the burst speed
   res.hitchMaxSpeed <= res.qbSpeed * 1.12 &&
+  res.hoverGlidesLanded === 40 &&
+  res.hairAbove.state === 'ground' &&
+  res.hairAbove.y === 0 &&
   res.allFinite;
 console.log(ok ? 'edges OK' : 'edges FAILED');
 console.log('--- errors ---');

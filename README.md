@@ -23,23 +23,26 @@ npm run test:e2e   # end-to-end browser suite (see Tests)
 
 ## Tests
 
-`npm run test:e2e` runs 18 browser tests against a dev server it starts itself, 8 at a time — about
+`npm run test:e2e` runs 19 browser tests against a dev server it starts itself, 8 at a time — about
 two minutes:
 
 - arcade flow (stages, continues, game over)
 - CPU vs CPU
 - movement physics and edge cases
 - melee
-- touch controls on an emulated phone
+- touch controls on an emulated phone, including boost + fire with one thumb
 - audio engine stress
 - crash/context-loss hardening
-- two-device versus, including 30 % packet loss and dropped-link recovery
+- two-device versus, including 30 % packet loss, dropped-link recovery, a rival whose page freezes,
+  and a rematch (both pilots still in control, VR picks kept)
 - split screen with two (emulated) gamepads: joining, each pad flying its own VR, pause, a controller
   dropping out and another taking over, rematch, and co-op (teams, no friendly fire, partner cam)
 - split-screen edge cases: double KO, resizing mid-fight, a frame failing mid-draw, co-op time-ups,
   continue through to the two-pilot ending
 - the roster: every VR's model, and each weapon of KESTREL, KONGO and ARACHNE doing its job (the
   versus test also flies ARACHNE vs KONGO, so mines, drones and the snare go over the network)
+- menus: the VR select screen on a phone held sideways, the lobbies driven by a controller, and
+  Xbox's browsing mode
 
 Dev-only URL switches keep it quick: `?fast` speeds up non-gameplay waits, `?noaudio` skips building
 the sound library, and `?grace=N` shortens the versus reconnect window. Production builds strip
@@ -96,8 +99,9 @@ types the code. Both choose a VR, hit **READY**, and fight best-of-three; **REMA
   State and inputs travel on an unordered, no-retransmit channel (a lost packet never stalls the ones
   behind it; inputs repeat the last few presses so none get lost), while one-shot events — hits,
   announcer calls — go on the reliable channel.
-- If the link drops mid-match (Wi-Fi blip, switching apps), both screens freeze with a countdown and the
-  match picks up where it stopped as soon as the devices re-pair — up to 20 seconds.
+- If the link drops mid-match (Wi-Fi blip, switching apps), both screens freeze within a couple of
+  seconds of the rival going quiet and the match picks up where it stopped as soon as the devices
+  re-pair — up to 20 seconds.
 
 ## Controls
 
@@ -118,7 +122,8 @@ types the code. Both choose a VR, hit **READY**, and fight best-of-three; **REMA
 keyboard). In one-player modes every connected gamepad controls 1P.
 
 **Touch:** on phones and tablets an on-screen arcade layout appears — floating stick on the left, LW /
-RW / CW / JUMP / BOOST / GUARD on the right, pause at the top. Play in landscape.
+RW / CW / JUMP / BOOST / GUARD on the right, pause at the top. Play in landscape. For a boosting shot
+with one thumb (KONGO's shoulder ram), hold BOOST, slide onto the weapon and lift there.
 
 **Gamepad — Modern:** left stick move, right stick turn, A jump, B/LB/RB dash, LT/RT = LW/RW
 (both = CW), Y = CW, X = guard.

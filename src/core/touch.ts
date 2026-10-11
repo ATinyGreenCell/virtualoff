@@ -30,6 +30,7 @@ const HOLD: Partial<Record<ButtonId, keyof Pick<TouchState, 'jump' | 'dash' | 'g
 const STICK_RADIUS = 52;
 const STICK_DEADZONE = 0.12;
 
+
 interface Button {
   def: ButtonDef;
   el: HTMLDivElement;
@@ -50,6 +51,8 @@ export class TouchControls implements TouchHooks {
   private readonly coarse: MediaQueryList | null;
   private readonly off: (() => void)[] = [];
   private stickPointer: number | null = null;
+  /** the weapon button a thumb holding BOOST has slid onto: lifting it there fires it (boost + fire with one thumb) */
+  private slideOver: Button | null = null;
   private originX = 0;
   private originY = 0;
   private scale = 1;
@@ -88,7 +91,8 @@ export class TouchControls implements TouchHooks {
       const btn: Button = { def, el: b, pointer: null };
       this.buttons.push(btn);
       this.listen(b, 'pointerdown', (e: PointerEvent) => this.press(btn, e));
-      const up = (e: PointerEvent) => this.release(btn, e.pointerId);
+      if (def.id === 'dash') this.listen(b, 'pointermove', (e: PointerEvent) => this.slide(btn, e));
+      const up = (e: PointerEvent) => this.release(btn, e.pointerId, e.type === 'pointerup');
       this.listen(b, 'pointerup', up);
       this.listen(b, 'pointercancel', up);
       this.listen(b, 'lostpointercapture', up);
@@ -211,25 +215,53 @@ export class TouchControls implements TouchHooks {
     const t = this.input.touch;
     const fire = FIRE[btn.def.id];
     const hold = HOLD[btn.def.id];
-    if (fire) {
-      t[fire] = true;
-      try {
-        navigator.vibrate?.(8);
-      } catch {
-        // vibration unsupported or blocked
-      }
-    }
+    if (fire) this.fire(fire);
     if (hold) t[hold] = true;
     if (hold === 'jump') t.jumpTap = true;
     else if (hold === 'dash') t.dashTap = true;
   }
 
-  private release(btn: Button, pointerId: number) {
+  private fire(slot: 'lw' | 'rw' | 'cw') {
+    this.input.touch[slot] = true;
+    try {
+      navigator.vibrate?.(8);
+    } catch {
+      // vibration unsupported or blocked
+    }
+  }
+
+  /**
+   * BOOST held, the thumb slides onto a weapon button (it lights up) and lifts there: that weapon fires
+   * as a boosting shot — KONGO's shoulder ram — with one thumb. Only where it lifts counts, so sliding
+   * over LW on the way to RW fires nothing. BOOST keeps the pointer, so its moves land here.
+   */
+  private slide(btn: Button, e: PointerEvent) {
+    if (btn.pointer !== e.pointerId) return;
+    let over: Button | null = null;
+    for (const b of this.buttons) {
+      if (!FIRE[b.def.id] || b.pointer !== null) continue;
+      const r = b.el.getBoundingClientRect();
+      if (Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2)) <= r.width * 0.55) over = b;
+    }
+    if (over === this.slideOver) return;
+    if (this.slideOver?.pointer === null) this.slideOver.el.classList.remove('on');
+    this.slideOver = over;
+    over?.el.classList.add('on');
+  }
+
+  private release(btn: Button, pointerId: number, lifted = false) {
     if (btn.pointer !== pointerId) return;
     btn.pointer = null;
     btn.el.classList.remove('on');
     const hold = HOLD[btn.def.id];
     if (hold) this.input.touch[hold] = false;
+    const slid = btn.def.id === 'dash' ? this.slideOver : null;
+    if (slid) {
+      this.slideOver = null;
+      if (slid.pointer === null) slid.el.classList.remove('on');
+      // the frame that sees BOOST let go still runs the boost: the shot comes out as the boosting one
+      if (lifted) this.fire(FIRE[slid.def.id]!);
+    }
   }
 
   private stickDown(e: PointerEvent) {

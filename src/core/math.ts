@@ -127,12 +127,21 @@ export function segAABB(p: THREE.Vector3, q: THREE.Vector3, min: THREE.Vector3, 
   return tmin;
 }
 
+const _axis = new THREE.Vector3();
+
 /** Rotate unit vector `dir` toward unit vector `want` by at most `maxAngle` radians (in place). */
 export function rotateToward(dir: THREE.Vector3, want: THREE.Vector3, maxAngle: number) {
   const dot = clamp(dir.dot(want), -1, 1);
   const angle = Math.acos(dot);
   if (angle < 1e-5) return dir;
   if (angle <= maxAngle) return dir.copy(want);
+  if (angle > Math.PI - 1e-3) {
+    // dead opposite (a drone climbing away from a target straight below): no unique way round, so turn
+    // about any axis square to it — sideways by preference
+    _axis.set(0, 1, 0).cross(dir);
+    if (_axis.lengthSq() < 1e-6) _axis.set(1, 0, 0);
+    return dir.applyAxisAngle(_axis.normalize(), maxAngle).normalize();
+  }
   const t = maxAngle / angle;
   // slerp between dir and want
   const sinA = Math.sin(angle);

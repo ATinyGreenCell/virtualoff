@@ -72,12 +72,33 @@ await touch('touchStart', [[resume.x, resume.y, 7]]);
 await touch('touchEnd', []);
 r.resumed = !!(await waitFor(async () => !(await me()).paused, 3000));
 
-// 7. portrait: the rotate prompt appears
+// 7. one thumb for boost + fire: hold BOOST, slide across onto RW and lift there — as KONGO, the shoulder ram
+await page.evaluate(async () => { const { SPECS } = await import('/src/game/specs.ts'); window.__prevB = window.__vo.app.screen; window.__vo.flow.start(SPECS.kongo); });
+await waitFor(() => page.evaluate(() => { const s = window.__vo.app.screen; return s !== window.__prevB && s.constructor.name === 'Battle' && s.phase === 'fight'; }), 30000);
+await page.evaluate(() => { window.__vo.app.screen.mechs[1].controlsEnabled = false; window.__voTouch.setBattleActive(true); });
+await waitFor(() => page.evaluate(() => document.querySelector('.tc')?.style.display !== 'none'), 5000);
+const boost2 = await center('.tc-dash');
+const rw2 = await center('.tc-rw');
+await touch('touchStart', [[jx, jy, 1]]);
+await touch('touchMove', [[jx, jy - 60, 1]]);
+await touch('touchStart', [[jx, jy - 60, 1], [boost2.x, boost2.y, 8]]);
+await waitFor(async () => (await me()).st === 'dash', 3000);
+// the rival straight ahead, in ramming range
+await page.evaluate(() => { const [a, b] = window.__vo.app.screen.mechs; b.pos.set(a.pos.x + Math.sin(a.yaw) * 30, 0, a.pos.z + Math.cos(a.yaw) * 30); b.vel.set(0, 0, 0); });
+// (LW sits on the way: sliding over it mustn't launch the rocket fist)
+for (let k = 1; k <= 6; k++) await touch('touchMove', [[jx, jy - 60, 1], [boost2.x + ((rw2.x - boost2.x) * k) / 6, boost2.y + ((rw2.y - boost2.y) * k) / 6, 8]]);
+await sleep(150);
+const crossed = await page.evaluate(() => window.__vo.app.screen.mechs[0].action?.pose ?? null);
+// lift the thumb there (CDP's touchEnd lifts every finger; the stick thumb doesn't matter here)
+await touch('touchEnd', []);
+r.slideRam = crossed ? `${crossed}!` : await waitFor(() => page.evaluate(() => { const a = window.__vo.app.screen.mechs[0].action; return a?.pose === 'ram' ? 'ram' : a?.pose === 'punchL' ? 'fist!' : null; }), 3000);
+
+// 8. portrait: the rotate prompt appears
 await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true, isLandscape: false });
 r.rotatePrompt = !!(await waitFor(() => page.evaluate(() => { const el = document.querySelector('.tc-rotate'); return el && getComputedStyle(el).display !== 'none'; }), 5000));
 
 for (const [k, v] of Object.entries(r)) console.log(`  ${k.padEnd(16)} ${JSON.stringify(v)}`);
-const ok = !!r.stickForward && r.boostTap.fired && !!r.boostHold && !!r.fireWhileMoving && r.jumpHold.y > 8 && r.paused && r.resumed && r.rotatePrompt;
+const ok = !!r.stickForward && r.boostTap.fired && !!r.boostHold && !!r.fireWhileMoving && r.jumpHold.y > 8 && r.paused && r.resumed && r.slideRam === 'ram' && r.rotatePrompt;
 console.log(ok ? 'touch OK' : 'touch FAILED');
 console.log('--- errors ---');
 console.log(errs.join('\n') || 'none');

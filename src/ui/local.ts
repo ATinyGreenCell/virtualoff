@@ -71,7 +71,7 @@ export class LocalScreen implements Screen {
     this.panel = this.el.querySelector('.vs-panel') as HTMLDivElement;
     this.panel.addEventListener('click', (e) => {
       const target = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
-      if (target && !target.classList.contains('off')) this.click(target.dataset.act!);
+      if (target && !target.classList.contains('off')) this.click(target.dataset.act!, (e as PointerEvent).pointerType);
     });
     app.ui.appendChild(this.el);
     audio.playMusic('select');
@@ -115,7 +115,8 @@ export class LocalScreen implements Screen {
       <div class="vs-label lc-mode">${MODE_INFO[this.mode].title}</div>
       <div class="vs-pick">${side(0)}<div class="vs-vs">${join}</div>${side(1)}</div>
       <div class="lc-hint">◀ ▶ choose VR · A / ENTER ready · B / ESC back</div>
-      <div class="vs-btn small" data-act="back">BACK</div>`;
+      <div class="vs-btn small" data-act="back">BACK</div>
+      ${IS_XBOX ? `<div class="xbox-hint">${XBOX_HINT}</div>` : ''}`;
     this.refreshSeats();
   }
 
@@ -151,7 +152,7 @@ export class LocalScreen implements Screen {
   // ------------------------------------------------------------------ actions
 
   /** Mouse / touch on the panel. */
-  private click(a: string) {
+  private click(a: string, pointer = 'mouse') {
     if (this.leaving) return;
     if (a === 'versus' || a === 'coop') this.chooseMode(a, null);
     else if (a === 'title') this.toTitle();
@@ -160,7 +161,17 @@ export class LocalScreen implements Screen {
       const i = Number(a.slice(-1));
       const seat = this.seats[i];
       if (!seat.device) {
-        // a click claims an open side for the keyboard
+        // A mouse click claims an open side for the keyboard. Not on Xbox, though — there a click is a
+        // controller's A in browsing mode, and seating the keyboard would lock the pads out — nor from a
+        // finger: the controllers join with their own A.
+        if (IS_XBOX || pointer === 'touch' || pointer === 'pen') {
+          audio.play('empty');
+          const hint = this.panel.querySelector('.xbox-hint');
+          hint?.classList.remove('nudge');
+          void (hint as HTMLElement | null)?.offsetWidth;
+          hint?.classList.add('nudge');
+          return;
+        }
         if (!this.seats.some((s) => s.device === 'keys')) this.join('keys', i);
         return;
       }
@@ -337,10 +348,7 @@ export class LocalScreen implements Screen {
       const key = shown ? `${id}:${alt}` : '';
       if (this.modelKeys[i] !== key) {
         const old = this.models[i];
-        if (old) {
-          this.hangar.platforms[i].remove(old.root);
-          old.dispose();
-        }
+        if (old) this.hangar.retire(old);
         this.models[i] = key ? new MechModel(SPECS[id], alt ? SPECS[id].altPalette : SPECS[id].palette) : null;
         if (this.models[i]) {
           this.models[i]!.root.position.y = 0.9;

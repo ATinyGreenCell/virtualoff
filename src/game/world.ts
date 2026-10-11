@@ -109,7 +109,9 @@ export class World {
   }
 
   private tick(dt: number) {
-    this.fx.update(dt, this.camera, this.viewportHeight);
+    // particles spawning particles (wreck debris trailing smoke) is pure eye candy: a versus guest runs
+    // its own, so none of it is mirrored
+    this.visual(() => this.fx.update(dt, this.camera, this.viewportHeight));
     this.arena.update(this.time, this.camera.position);
     for (let i = 0; i < this.shakes.length; i++) this.shakes[i] = Math.max(0, this.shakes[i] - dt * 2.8);
   }
@@ -155,6 +157,9 @@ export class World {
         a.pos.z -= (dz / d) * push;
         b.pos.x += (dx / d) * push;
         b.pos.z += (dz / d) * push;
+        // a shove never moves a mech into a block or past the arena's edge
+        this.arena.resolve(a.pos, a.spec.radius, a.spec.height);
+        this.arena.resolve(b.pos, b.spec.radius, b.spec.height);
       }
     }
   }

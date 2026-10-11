@@ -364,6 +364,7 @@ export class Effects {
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         side: THREE.DoubleSide,
+        forceSinglePass: true,
         fog: false,
       });
       const m = new THREE.Mesh(this.ringGeo, mat);

@@ -27,6 +27,9 @@ function applyAudioSettings() {
   audio.voiceEnabled = settings.voice;
 }
 
+/** clicks this soon after a menu screen appears are the tail of the one that opened it (a double tap): ignored */
+const CLICK_GUARD_S = 0.4;
+
 export const CONTROLS_HTML = `
 <div class="ctl-cols">
   <div class="ctl-col">
@@ -56,6 +59,17 @@ export const CONTROLS_HTML = `
     <h3>GAMEPAD · TWIN STICK</h3>
     <p>Each stick is one arcade lever. Both forward to walk, opposite directions to turn,
     pull them apart to jump, push them together to guard. LB / RB = turbo (boost), LT / RT = triggers.</p>
+  </div>
+  <div class="ctl-col ctl-touch">
+    <h3>TOUCH</h3>
+    <dl>
+      <dt>LEFT THUMB</dt><dd>stick: walk / strafe</dd>
+      <dt>LW · RW · CW</dt><dd>weapons</dd>
+      <dt>JUMP</dt><dd>jump · hold to climb (EN)</dd>
+      <dt>BOOST</dt><dd>tap = quick boost (EN) · hold = boost</dd>
+      <dt>BOOST ➜ weapon</dt><dd>hold BOOST, slide onto a weapon and lift there: a boosting shot (KONGO: shoulder ram)</dd>
+      <dt>GUARD · ❚❚</dt><dd>guard · pause</dd>
+    </dl>
   </div>
 </div>
 <div class="ctl-tips">
@@ -382,6 +396,8 @@ export class Hangar {
   readonly platforms: THREE.Group[] = [];
   private readonly ringMat: THREE.MeshBasicMaterial;
   private readonly disposables: { dispose(): void }[] = [];
+  /** models taken off a platform, with the updates left before they're disposed */
+  private readonly retired: { model: MechModel; left: number }[] = [];
 
   get platform() {
     return this.platforms[0];
@@ -419,6 +435,7 @@ export class Hangar {
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
+      forceSinglePass: true,
     });
     for (const x of xs) {
       const platform = new THREE.Group();
@@ -448,9 +465,27 @@ export class Hangar {
 
   update(t: number) {
     this.ringMat.color.setHSL(0.53, 1, 0.55 + Math.sin(t * 4) * 0.1);
+    for (let i = this.retired.length - 1; i >= 0; i--) {
+      const r = this.retired[i];
+      if (--r.left > 0) continue;
+      r.model.dispose();
+      this.retired.splice(i, 1);
+    }
+  }
+
+  /**
+   * Take a model off its platform. It's disposed a couple of updates later, once its replacement has
+   * been drawn: disposing straight away drops the shaders the two share, and every VR switch would
+   * compile them again.
+   */
+  retire(model: MechModel) {
+    model.root.parent?.remove(model.root);
+    this.retired.push({ model, left: 2 });
   }
 
   dispose() {
+    for (const r of this.retired) r.model.dispose();
+    this.retired.length = 0;
     for (const d of this.disposables) d.dispose();
   }
 }
@@ -488,11 +523,15 @@ export class SelectScreen implements Screen {
       <div class="sel-info"></div>
       <div class="sel-roster"></div>
       <div class="sel-arrow left">◀</div><div class="sel-arrow right">▶</div>
-      <div class="sel-footer">◀ ▶ choose · START / J confirm · ESC back</div>`;
+      <div class="sel-footer"><span class="keys">◀ ▶ choose · START / J confirm · ESC back</span><span class="taps">tap a VR · tap it again (or its name) to confirm</span></div>`;
     app.ui.appendChild(this.el);
     this.el.querySelector('.sel-arrow.left')!.addEventListener('click', () => this.move(-1));
     this.el.querySelector('.sel-arrow.right')!.addEventListener('click', () => this.move(1));
-    this.el.querySelector('.sel-info')!.addEventListener('click', () => this.confirm());
+    // confirming takes the name (or a second tap on the chosen chip) — not the whole panel, which sits
+    // under the ◀ arrow on small screens; and not a tap that lands while the screen is still coming up
+    this.el.querySelector('.sel-info')!.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('.sel-name') && this.t > CLICK_GUARD_S) this.confirm();
+    });
     audio.playMusic('select');
     this.show(0);
   }
@@ -500,10 +539,7 @@ export class SelectScreen implements Screen {
   private show(i: number) {
     this.idx = i;
     const spec = ROSTER[i];
-    if (this.model) {
-      this.hangar.platform.remove(this.model.root);
-      this.model.dispose();
-    }
+    if (this.model) this.hangar.retire(this.model);
     this.model = new MechModel(spec, spec.palette);
     this.model.root.position.y = 0.9;
     this.hangar.platform.add(this.model.root);
@@ -529,7 +565,9 @@ export class SelectScreen implements Screen {
     roster.innerHTML = ROSTER.map((r, k) => `<div class="chip${k === i ? ' on' : ''}" style="--c:#${r.palette.secondary.toString(16).padStart(6, '0')}">${r.name}</div>`).join('');
     roster.querySelectorAll<HTMLDivElement>('.chip').forEach((c, k) =>
       c.addEventListener('click', () => {
-        if (k !== this.idx && !this.chosen) {
+        if (this.chosen || this.t < CLICK_GUARD_S) return;
+        if (k === this.idx) this.confirm();
+        else {
           audio.play('uiMove');
           this.show(k);
         }

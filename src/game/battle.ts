@@ -6,10 +6,11 @@ import { clamp, hdist, rand, rightOf } from '../core/math';
 import { IS_XBOX, XBOX_REFOCUS } from '../core/platform';
 import { reducedMotion, type Difficulty } from '../core/settings';
 import { ceremony } from '../core/testmode';
-import type { NetLink } from '../net/link';
+import { RECONNECT_GRACE_MS, type NetLink } from '../net/link';
 import {
   EDGE_MASK,
   PHASES,
+  cleanInput,
   edgeBits,
   packInput,
   r2,
@@ -20,6 +21,7 @@ import {
   type ProjSnap,
   type Role,
   type SnapMsg,
+  validSnap,
 } from '../net/protocol';
 import { HUD } from '../ui/hud';
 import { AIController } from './ai';
@@ -69,6 +71,17 @@ const NUMBERS = ['one', 'two', 'three', 'four', 'five'];
 const SNAP_MS = 15;
 /** host: a guest that goes quiet this long is treated as letting go of the controls */
 const INPUT_STALE_MS = 400;
+/**
+ * versus: a rival this quiet (no inputs, no snapshots) has dropped, whatever the connection says — WebRTC
+ * takes ~12 s to notice — so both sides freeze until they hear from each other again
+ */
+const STALL_MS = 1500;
+/** versus: how long WebRTC itself can take to notice a dead link — a silent rival is given that on top of the usual grace */
+const LINK_NOTICE_MS = 15_000;
+/** host: an input this far behind the newest is a count that started over (an older build after a rematch), not a stale packet */
+const SEQ_RESTART = 200;
+/** guest: one-shot effects running this late (a backgrounded tab catching up) are skipped; announcer calls never are */
+const EVENT_LATE_S = 0.3;
 /**
  * Co-op: it's two on one, so the boss gets more armor, hits harder, recharges faster and shrugs off
  * light hits (two players could otherwise stagger it forever), and its pilot is sharper than the
@@ -169,6 +182,10 @@ export class Battle implements Screen {
   private rivalGone = false;
   /** versus: the link dropped and is trying to come back — the match is frozen meanwhile */
   private reconnectEl: HTMLDivElement | null = null;
+  /** versus: when anything last came in from the rival (performance.now ms; 0 = nothing yet this battle) */
+  private heardAt = 0;
+  /** versus: the match froze because the rival went quiet — give up on them at this time (0 = the link itself is reconnecting) */
+  private stallDeadline = 0;
   /** host: what the guest is pressing */
   private remoteMsg: InputMsg | null = null;
   private remoteEdges = 0;
@@ -185,7 +202,6 @@ export class Battle implements Screen {
   private jitter = 0.01;
   private lastArrival = 0;
   private lastHt = 0;
-  private inputSeq = 0;
   private lastInputKey = '';
   private lastInputAt = 0;
   private readonly projScratch: ProjSnap[] = [];
@@ -323,7 +339,7 @@ export class Battle implements Screen {
       if (this.phase === 'fight' && !this.paused && !this.finished) this.setPaused(true);
     } else if (this.mode === 'guest') {
       // let go of the controls right away rather than walking into a wall while away
-      this.net?.sendInput(packInput(++this.inputSeq, NEUTRAL, 0));
+      if (this.net) this.net.sendInput(packInput(++this.net.inputSeq, NEUTRAL, 0));
     }
   }
 
@@ -393,6 +409,10 @@ export class Battle implements Screen {
     this.app.touch?.setBattleActive(!this.split && this.phase === 'fight' && !this.paused && !this.leaveEl && !this.reconnectEl);
     if (this.reconnectEl) {
       this.updateReconnect();
+      return;
+    }
+    if (this.stalled()) {
+      this.setReconnecting(true, true);
       return;
     }
     if (this.mode === 'guest') {
@@ -711,7 +731,11 @@ export class Battle implements Screen {
     const onStatus = (st: string) => {
       if (st === 'lost' || st === 'error') this.rivalLeft('CONNECTION LOST');
       else if (st === 'reconnecting') this.setReconnecting(true);
-      else if (st === 'connected') this.setReconnecting(false);
+      else if (st === 'connected') {
+        // back on the line: give the rival's traffic a moment to show up again
+        if (this.heardAt) this.heardAt = performance.now();
+        this.setReconnecting(false);
+      }
     };
     const onLobby = (m: { t: string }) => {
       if (m.t === 'bye') this.rivalLeft('YOUR RIVAL LEFT');
@@ -725,8 +749,12 @@ export class Battle implements Screen {
       link.attach(this, {
         onStatus,
         onLobby,
-        onInput: (m) => {
-          if (m[0] <= this.remoteSeq) return;
+        onInput: (raw) => {
+          const m = cleanInput(raw);
+          if (!m) return;
+          this.heardAt = performance.now();
+          // each packet repeats the last few inputs: skip those already seen (unless the count started over)
+          if (m[0] <= this.remoteSeq && m[0] > this.remoteSeq - SEQ_RESTART) return;
           this.remoteSeq = m[0];
           this.remoteMsg = m;
           this.remoteAt = performance.now();
@@ -740,17 +768,24 @@ export class Battle implements Screen {
         onSnap: (m) => this.receiveSnap(m),
         // one-shot events of fast-channel snapshots arrive separately (and reliably), in order
         onEvents: (m) => {
-          for (const e of m.e) this.pending.push({ ht: m.ht, e });
+          if (!m || typeof m.ht !== 'number' || !Number.isFinite(m.ht) || !Array.isArray(m.e)) return;
+          this.heardAt = performance.now();
+          for (const e of m.e) if (Array.isArray(e)) this.pending.push({ ht: m.ht, e });
         },
       });
     }
   }
 
-  /** Freeze the match while the link tries to come back (both sides), and resume where it stopped. */
-  private setReconnecting(on: boolean) {
+  /**
+   * Freeze the match while the link tries to come back (both sides), and resume where it stopped.
+   * `stall`: the rival went quiet on a link that still looks up — we give up on them ourselves.
+   */
+  private setReconnecting(on: boolean, stall = false) {
     if (on === !!this.reconnectEl || this.finished) return;
     if (on) {
       if (this.rivalGone) return;
+      this.stallDeadline = stall ? performance.now() + RECONNECT_GRACE_MS + LINK_NOTICE_MS : 0;
+      this.world.projectiles.hushLoops();
       const el = document.createElement('div');
       el.className = 'overlay pause reconnect';
       el.innerHTML = `<div class="ov-title small">CONNECTION LOST</div><div class="ov-hint">reconnecting… <b class="rc-left"></b><br>the match resumes on its own · pause to leave</div>`;
@@ -768,9 +803,25 @@ export class Battle implements Screen {
   }
 
   private updateReconnect() {
-    const left = Math.max(0, Math.ceil(((this.net?.reconnectDeadline ?? 0) - performance.now()) / 1000));
+    const now = performance.now();
+    const linkDown = this.net?.status === 'reconnecting';
+    // keep telling the rival we're here: both sides freeze, and neither would ever hear the other again
+    if (this.mode === 'host') this.sendSnapshot();
+    else this.sendInput();
+    if (!linkDown && this.stallDeadline) {
+      if (now - this.heardAt < 250) {
+        this.setReconnecting(false);
+        return;
+      }
+      if (now > this.stallDeadline) {
+        this.rivalLeft('CONNECTION LOST');
+        return;
+      }
+    }
+    // the countdown is the link's grace period, once it knows it's down (a silent rival alone shows none)
+    const left = linkDown ? `${Math.max(0, Math.ceil(((this.net?.reconnectDeadline ?? 0) - now) / 1000))}` : '';
     const t = this.reconnectEl?.querySelector('.rc-left');
-    if (t) t.textContent = `${left}`;
+    if (t && t.textContent !== left) t.textContent = left;
     if (this.leaveEl) this.updateLeave();
     else if (this.app.input.menu.pause) this.openLeave();
   }
@@ -803,12 +854,30 @@ export class Battle implements Screen {
       e: this.outEvents,
     };
     if (this.net.sendSnap(msg)) this.outEvents = [];
-    else if (this.outEvents.length > 600) this.outEvents.splice(0, this.outEvents.length - 600);
+    else if (this.outEvents.length > 600) {
+      // backed up: shed the oldest effects, never the announcer and result calls the guest's screens follow
+      let drop = this.outEvents.length - 600;
+      this.outEvents = this.outEvents.filter((e) => e[0] === 'u' || drop-- <= 0);
+    }
+  }
+
+  /** Versus: the rival has gone quiet — the link is down, even if the connection hasn't noticed yet. */
+  private stalled() {
+    return !!this.net?.connected && this.heardAt > 0 && !this.rivalGone && this.phase !== 'result' && performance.now() - this.heardAt > STALL_MS;
   }
 
   private receiveSnap(m: SnapMsg) {
+    if (!validSnap(m)) return;
+    this.heardAt = performance.now();
+    // its one-shot events travel only once: queue them even if a fresher snapshot overtook this one
+    for (const e of m.e) if (Array.isArray(e)) this.pending.push({ ht: m.ht, e });
     const last = this.snaps[this.snaps.length - 1];
-    if (last && m.ht <= last.ht) return;
+    if (last && m.ht <= last.ht) {
+      if (m.ht > last.ht - 30) return;
+      // the host's clock went far backwards: it started over, so follow it rather than wait to catch up
+      this.snaps.length = 0;
+      this.renderT = -1;
+    }
     const now = performance.now() / 1000;
     if (this.lastArrival) {
       const dev = Math.abs(now - this.lastArrival - (m.ht - this.lastHt));
@@ -818,20 +887,19 @@ export class Battle implements Screen {
     this.lastHt = m.ht;
     this.snaps.push(m);
     if (this.snaps.length > 40) this.snaps.shift();
-    for (const e of m.e) this.pending.push({ ht: m.ht, e });
   }
 
   private sendInput() {
     if (!this.net) return;
-    const c = this.leaveEl || this.phase === 'result' ? NEUTRAL : this.app.input.controls;
+    const c = this.leaveEl || this.reconnectEl || this.phase === 'result' ? NEUTRAL : this.app.input.controls;
     const edges = edgeBits(c);
-    const msg = packInput(this.inputSeq + 1, c, edges);
+    const msg = packInput(this.net.inputSeq + 1, c, edges);
     const key = `${msg[1]},${msg[2]},${msg[3]},${msg[4]}`;
     const now = performance.now();
     // send on any change or press, plus a 20 Hz heartbeat: it tells the host we're here, and on the
     // lossy fast channel it re-delivers (with the last few inputs) anything a dropped packet carried
     if (edges || key !== this.lastInputKey || now - this.lastInputAt > 50) {
-      this.inputSeq++;
+      this.net.inputSeq++;
       this.net.sendInput(msg);
       this.lastInputKey = key;
       this.lastInputAt = now;
@@ -863,7 +931,7 @@ export class Battle implements Screen {
       if (i > 2) snaps.splice(0, i - 2);
       while (this.pending.length && this.pending[0].ht <= this.renderT) {
         const ev = this.pending.shift()!;
-        this.playEvent(ev.e);
+        if (ev.e[0] === 'u' || ev.ht > this.renderT - EVENT_LATE_S) this.playEvent(ev.e);
       }
     }
     this.presentPhase();
@@ -874,11 +942,19 @@ export class Battle implements Screen {
   }
 
   private applyFrame(a: SnapMsg, b: SnapMsg | null, k: number) {
+    // the rival left: the notice is up, and late snapshots mustn't pull the phase back under it
+    if (this.rivalGone) return;
     const ph = PHASES[a.ph] ?? 'fight';
     if (ph !== this.phase) {
       this.phase = ph;
       this.flags.clear();
     }
+    // the score and the result screen follow the snapshots too, so a lost event can't strand the guest
+    if (a.w[0] !== this.wins[0] || a.w[1] !== this.wins[1]) {
+      this.wins = [a.w[0], a.w[1]];
+      for (const v of this.views) v.hud.setWins(this.viewWins(v));
+    }
+    if (ph === 'result' && !this.resultEl) this.showResult();
     const same = b && b.ph === a.ph;
     this.phaseT = same ? a.pt + (b.pt - a.pt) * k : a.pt;
     this.timeLeft = same ? a.tl + (b.tl - a.tl) * k : a.tl;
@@ -910,6 +986,10 @@ export class Battle implements Screen {
   private rivalLeft(title: string) {
     if (this.rivalGone || this.finished) return;
     this.rivalGone = true;
+    // the match is over: nobody fights on behind the notice, and confirm or back takes you out from here
+    for (const m of this.mechs) m.controlsEnabled = false;
+    this.world.live = false;
+    this.enter('result');
     this.reconnectEl?.remove();
     this.reconnectEl = null;
     this.leaveEl?.remove();
@@ -1114,6 +1194,7 @@ export class Battle implements Screen {
   private setPaused(on: boolean) {
     this.paused = on;
     if (on) {
+      this.world.projectiles.hushLoops();
       audio.play('uiSelect');
       this.pauseIdx = 0;
       const el = document.createElement('div');
@@ -1323,7 +1404,8 @@ export class Battle implements Screen {
     if (this.mode === 'host' || this.mode === 'guest' || this.mode === 'local') {
       if (!this.resultEl) return;
       const count = this.mode === 'local' ? 3 : 2;
-      if ((m.up || m.down) && !this.wantRematch) {
+      // still free to move to QUIT while waiting on the rival's answer to a rematch
+      if (m.up || m.down) {
         this.resultIdx = (this.resultIdx + (m.down ? 1 : count - 1)) % count;
         audio.play('uiMove');
         this.renderMenu(this.resultEl, this.resultIdx);
@@ -1380,6 +1462,8 @@ export class Battle implements Screen {
   dispose() {
     this.app.touch?.setBattleActive(false);
     this.net?.detach(this);
+    // torn down without a result (a crash sent the app back to the title): let the rival know it's over
+    if (this.net && !this.finished) this.net.close();
     this.offResize();
     this.world.dispose();
     for (const v of this.views) {

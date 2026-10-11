@@ -92,18 +92,35 @@ await waitFor(async () => (await scr(host)).phase === 'fight', 20000, 'r2');
 await ko(0);
 await waitFor(async () => (await scr(host)).phase === 'ready', 20000, 'r3 ready');
 await waitFor(async () => (await scr(host)).phase === 'fight', 20000, 'r3');
+// the guest loses the last round's result events (as when a stalled link sheds its backlog): its score
+// and result screen must still follow the host's snapshots
+await guest.evaluate(() => {
+  const s = window.__vo.app.screen;
+  const play = s.playEvent.bind(s);
+  s.playEvent = (e) => { if (e[0] === 'u' && (e[1] === 'rres' || e[1] === 'match')) return; play(e); };
+});
 await ko(1);
 const res = await waitFor(async () => (await scr(guest)).phase === 'result' && (await scr(host)).phase === 'result', 20000, 'result');
-console.log('match result shown on both:', !!res, JSON.stringify(await host.evaluate(() => document.querySelector('.result .ov-title')?.textContent)), JSON.stringify(await guest.evaluate(() => document.querySelector('.result .ov-title')?.textContent)));
+const score = (p) => p.evaluate(() => document.querySelector('.result .stats b')?.textContent);
+console.log('match result shown on both:', !!res, JSON.stringify(await host.evaluate(() => document.querySelector('.result .ov-title')?.textContent)), JSON.stringify(await guest.evaluate(() => document.querySelector('.result .ov-title')?.textContent)), `score host ${await score(host)} guest ${await score(guest)}`);
 await guest.screenshot({ path: `${OUT}/vs-guest-result.png` });
 await sleep(1200);
 await press(host, 'Enter'); await sleep(400); await press(guest, 'Enter');
 const back = await waitFor(async () => (await scr(host)).state === 'pick' && (await scr(guest)).state === 'pick', 15000, 'rematch lobby');
 console.log('both back in lobby for rematch:', !!back);
+// the lobby keeps each side's VR for the rematch (it used to reset both to JEBE)
+const picks = [await host.evaluate(() => window.__vo.app.screen.myPick), await guest.evaluate(() => window.__vo.app.screen.myPick)];
+console.log('rematch keeps the picks:', picks[0] === 'arachne' && picks[1] === 'kongo', JSON.stringify(picks));
 await sleep(800);
 await press(guest, 'Enter'); await sleep(300); await press(host, 'Enter');
 const f2 = await waitFor(async () => (await scr(host)).phase === 'fight' && (await scr(guest)).phase === 'fight', 30000, 'fight 2');
 console.log('second match started:', !!f2);
+// the guest still drives its VR in the rematch (its inputs used to look older than the last match's)
+const gpos = () => host.evaluate(() => { const m = window.__vo.app.screen.mechs[1]; return [m.pos.x, m.pos.z]; });
+const p0 = await gpos();
+await guest.keyboard.down('KeyW'); await sleep(1500); await guest.keyboard.up('KeyW');
+const p1 = await gpos();
+console.log('guest moves in the rematch:', Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) > 5, JSON.stringify({ from: p0.map(Math.round), to: p1.map(Math.round) }));
 // guest leaves mid-fight
 await press(guest, 'Escape'); await sleep(300); await press(guest, 'ArrowDown'); await sleep(200); await press(guest, 'Enter');
 const left = await waitFor(async () => (await host.evaluate(() => document.querySelector('.result .ov-title')?.textContent || '')).includes('LEFT'), 15000, 'host sees leave');
@@ -112,6 +129,11 @@ const gTitle = await waitFor(async () => (await scr(guest)).screen === 'TitleScr
 const gLink = await guest.evaluate(() => window.__vo.flow?.link ?? null);
 console.log('host notified of leave:', JSON.stringify(left), '| guest reached title:', !!gTitle, gTitle ? `${Date.now() - tl} ms after the host saw it` : JSON.stringify(await scr(guest)));
 await host.screenshot({ path: `${OUT}/vs-host-rivalleft.png` });
+// and the host gets out of the notice from the keyboard (the fight was still on: it used to ignore keys)
+await sleep(800);
+await press(host, 'Enter');
+const hTitle = await waitFor(async () => (await scr(host)).screen === 'TitleScreen', 8000, 'host back at title');
+console.log('host leaves the notice with ENTER:', !!hTitle);
 if (relayErrs) console.log(`(${relayErrs} failed connections to public Nostr relays ignored: one is down, pairing used the others)`);
 console.log('--- errors ---'); console.log(errs.join('\n') || 'none');
 await browser.close();
