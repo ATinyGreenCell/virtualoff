@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { makeControls, type ControlFrame } from '../core/input';
+import { makeControls, resetControls, type ControlFrame } from '../core/input';
 import { approachAngle, clamp, damp, forwardOf, hdist, rand, rightOf, wrapAngle, yawBetween } from '../core/math';
 import { POSES, SLOTS as NET_SLOTS, STATES, r1, r2, r3, type MechSnap } from '../net/protocol';
 import { MechModel, makePose } from './mechModel';
@@ -11,6 +11,8 @@ export type MechState = 'ground' | 'dash' | 'air' | 'airdash' | 'land' | 'guard'
 
 const SLOTS: Slot[] = ['lw', 'rw', 'cw'];
 const NEUTRAL = makeControls();
+/** what a snared pilot still gets through: turning, guarding and firing — no moving, boosting or jumping */
+const PINNED = makeControls();
 const STAGGER_TIME = 0.36;
 const DOWN_TIME = 1.35;
 const GETUP_TIME = 0.55;
@@ -64,6 +66,8 @@ export class Mech {
   /** co-op boss: light hits don't stagger it, and it takes this many times the punishment before
    *  going down — two players can't stun-lock it between them */
   poise = 1;
+  /** caught in a snare net: pinned in place for this long */
+  snareT = 0;
   action: Action | null = null;
   invuln = 0;
   downValue = 0;
@@ -171,6 +175,7 @@ export class Mech {
     this.enIdle = 9;
     this.qbT = this.qbGap = 0;
     this.thrusting = this.dashHeld = false;
+    this.snareT = 0;
     this.model.root.visible = true;
     this.model.root.position.copy(pos);
     this.model.root.rotation.y = yaw;
@@ -205,7 +210,19 @@ export class Mech {
   // ------------------------------------------------------------------ frame update
 
   update(dt: number, input: ControlFrame, w: World) {
-    const c = this.controlsEnabled && this.alive ? input : NEUTRAL;
+    let c = this.controlsEnabled && this.alive ? input : NEUTRAL;
+    if (this.snareT > 0) {
+      this.snareT = Math.max(0, this.snareT - dt);
+      c = pinned(c);
+      // a dash or jump pressed just before the net hit doesn't get to fire once it's on
+      this.bufJump = this.bufDash = 0;
+      // pinned: whatever speed you had dies away fast, and a burst in progress is over
+      const k = Math.max(0, 1 - 9 * dt);
+      this.vel.x *= k;
+      this.vel.z *= k;
+      if (this.vel.y > 0) this.vel.y *= k;
+      this.qbT = 0;
+    }
     this.stateT += dt;
     if (this.invuln > 0) this.invuln -= dt;
     this.downValue = Math.max(0, this.downValue - 50 * dt);
@@ -529,9 +546,9 @@ export class Mech {
 
   /** Hold JUMP in the air: thrusters hold a steady climb (EN), fading out toward the ceiling. */
   private thrust(dt: number, c: ControlFrame) {
-    if (!c.jump || this.stateT < 0.08 || this.vel.y >= this.spec.ascendSpeed) return;
+    if (!c.jump || this.stateT < 0.08 || this.vel.y >= this.spec.ascendSpeed || this.action?.dive) return;
     const room = clamp((CEIL - this.pos.y) / (CEIL - CEIL_START), 0, 1);
-    if (room <= 0 || !this.drain(EN_THRUST, dt)) return;
+    if (room <= 0 || !this.drain(EN_THRUST * this.spec.airEN, dt)) return;
     this.vel.y += (this.spec.ascendSpeed * room - this.vel.y) * Math.min(1, 9 * dt);
     this.thrusting = true;
   }
@@ -568,14 +585,14 @@ export class Mech {
     }
     if (!this.dashShot && this.tryAttack(w, 'air')) this.dashShot = true;
     // the burst is already paid for; the glide after it runs on EN
-    const fuel = this.qbT > 0 || this.drain(EN_AIRBOOST, dt);
+    const fuel = this.qbT > 0 || this.drain(EN_AIRBOOST * this.spec.airEN, dt);
     if ((!c.dash && this.qbT <= 0) || !fuel) {
       this.setState('air');
       return;
     }
     this.thrust(dt, c);
-    // hovering: the fall levels off into a slow sink
-    if (!this.thrusting && this.vel.y < -2) this.vel.y += (-2 - this.vel.y) * Math.min(1, 5 * dt);
+    // hovering: the fall levels off into a slow sink (not in a committed dive)
+    if (!this.thrusting && !this.action?.dive && this.vel.y < -2) this.vel.y += (-2 - this.vel.y) * Math.min(1, 5 * dt);
     if (!this.action || this.action.keepDash || this.action.hover) this.boostDrive(dt, c, this.spec.airBoostSpeed, 0.8);
     this.dustT -= dt;
     if (this.dustT <= 0) {
@@ -630,6 +647,7 @@ export class Mech {
     const dist = hdist(this.pos, tgt.pos);
     if (
       (this.state === 'ground' || this.state === 'dash') &&
+      !(slot === 'cw' && this.spec.closeCW) &&
       dist < this.spec.meleeRange &&
       Math.abs(tgt.pos.y - this.pos.y) < 4 &&
       tgt.hittable &&
@@ -661,7 +679,8 @@ export class Mech {
         const d = _v.length();
         const stopAt = this.spec.radius + tgt.spec.radius + 1.0;
         if (d > 0.01) _v.divideScalar(d);
-        const sp = d > stopAt ? a.lunge.speed : 0;
+        // a snared mech swings where it stands: no lunging out of the net
+        const sp = d > stopAt && this.snareT <= 0 ? a.lunge.speed : 0;
         this.vel.x = _v.x * sp;
         this.vel.z = _v.z * sp;
         this.yaw = wrapAngle(approachAngle(this.yaw, Math.atan2(_v.x, _v.z), 10 * dt));
@@ -678,7 +697,7 @@ export class Mech {
       if (d < reach && _f.dot(_v) > 0.3 && Math.abs(tgt.pos.y - this.pos.y) < 5 && tgt.hittable) {
         a.hasHit = true;
         tgt.centerInto(_p);
-        const ok = tgt.takeHit({ damage: this.spec.melee.damage, knock: 'down', dir: _v.clone(), source: this, pos: _p.clone(), heavy: true }, w);
+        const ok = tgt.takeHit({ damage: a.hitDamage ?? this.spec.melee.damage, knock: 'down', dir: _v.clone(), source: this, pos: _p.clone(), heavy: true }, w);
         if (ok) {
           w.fx.flash(_p, 0xffffff, 12, 0.18, true);
           w.fx.spark(_p, 26, this.palette.beam, 34);
@@ -756,6 +775,12 @@ export class Mech {
   }
 
   private onLand(w: World, impact: number) {
+    // an air slam lands its blow on touchdown
+    const hook = this.action?.onLand;
+    if (hook && this.action) {
+      this.action.onLand = undefined;
+      hook(this, w);
+    }
     if (this.state === 'air' || this.state === 'airdash') {
       // touch down at full speed — only a hard fall costs a beat — and keep boosting if DASH is held
       const hard = impact > this.spec.jumpVel * HARD_LANDING;
@@ -765,7 +790,7 @@ export class Mech {
       } else this.setState(this.dashHeld ? 'dash' : 'ground');
       w.sound('land', this.pos, hard ? 0.9 : 0.6);
       w.fx.dust(this.pos, hard ? 12 : 7, w.dustColor, 2);
-      if (this.spec.id === 'fujin' && hard) w.shake(0.15, this.pos);
+      if (this.spec.heavy && hard) w.shake(0.15, this.pos);
     } else if ((this.state === 'down' || this.state === 'dead') && impact > 6) {
       w.fx.dust(this.pos, 14, w.dustColor, 3, 3);
       w.sound('land', this.pos, 1);
@@ -777,7 +802,8 @@ export class Mech {
   // ------------------------------------------------------------------ damage
 
   takeHit(h: Hit, w: World): boolean {
-    if (!this.hittable) return false;
+    // once the round is decided, stray shots, drones and mines can't change it
+    if (!this.hittable || !w.live) return false;
     let dmg = h.damage * (h.source ? h.source.power : 1);
     forwardOf(this.yaw, _f);
     const frontal = -(h.dir.x * _f.x + h.dir.z * _f.z) > 0.2;
@@ -801,9 +827,12 @@ export class Mech {
       return true;
     }
     if (guarded) return true;
+    // a heavy-poised frame (the co-op boss) shakes a net off sooner: two players can't pin it down for good
+    if (h.snare) this.snareT = Math.max(this.snareT, h.snare / this.poise);
     this.downValue += h.knock === 'down' ? 1000 : dmg;
     if (this.downValue >= DOWN_THRESHOLD * this.poise) this.knockDown(h, w);
-    else if (h.knock === 'stagger' && this.poise <= 1) this.stagger(h);
+    // a brawler's armored lunge shrugs off light hits
+    else if (h.knock === 'stagger' && this.poise <= 1 && !this.action?.armor) this.stagger(h);
     return true;
   }
 
@@ -825,6 +854,7 @@ export class Mech {
   private knockDown(h: Hit, w: World) {
     this.cancelAction(w);
     this.interrupt();
+    this.snareT = 0;
     this.setState('down');
     this.downValue = 0;
     this.vel.set(h.dir.x * 16, 9, h.dir.z * 16);
@@ -834,6 +864,7 @@ export class Mech {
   private die(h: Hit, w: World) {
     this.cancelAction(w);
     this.interrupt();
+    this.snareT = 0;
     this.setState('dead');
     this.deathT = 0;
     this.fxT = 0;
@@ -858,8 +889,8 @@ export class Mech {
     if (walking) p.walkPhase += (hs / 7.2) * Math.PI * 2 * dt;
     if (Math.floor(p.walkPhase / Math.PI) !== Math.floor(prevPhase / Math.PI) && this.wWalk > 0.3) {
       w.visual(() => {
-        w.sound('step', this.pos, this.spec.id === 'fujin' ? 0.5 : 0.3);
-        if (this.spec.id === 'fujin') w.shake(0.03, this.pos);
+        w.sound('step', this.pos, this.spec.heavy ? 0.5 : 0.3);
+        if (this.spec.heavy) w.shake(0.03, this.pos);
       });
     }
     p.walkAmt = this.wWalk;
@@ -890,6 +921,7 @@ export class Mech {
     p.down = st === 'down' || st === 'dead' ? 1 : st === 'getup' ? Math.max(0, 1 - this.stateT / 0.4) : 0;
 
     p.aimR = p.aimBoth = p.throwW = p.beam = p.meleeW = p.saber = p.charge = 0;
+    p.punchW = p.slamW = p.ram = p.fistOut = 0;
     this.aimHold = a?.pose === 'aimR' ? 0.55 : Math.max(0, this.aimHold - dt);
     if (a) {
       const u = a.t / a.duration;
@@ -911,7 +943,20 @@ export class Mech {
         case 'melee':
           p.meleeW = 1;
           p.melee = u;
-          p.saber = this.spec.id === 'jebe' && u > 0.06 && u < 0.88 ? Math.min(1, (u - 0.06) * 12) : 0;
+          p.saber = this.spec.melee.style === 'slash' && u > 0.06 && u < 0.88 ? Math.min(1, (u - 0.06) * 12) : 0;
+          break;
+        case 'punchL':
+          p.punchW = fade;
+          p.punchL = u;
+          // the fist leaves the arm when it fires (0.2 s in) and is back once the punch is over
+          p.fistOut = a.t > 0.2 ? 1 : 0;
+          break;
+        case 'slam':
+          p.slamW = fade;
+          p.slam = u;
+          break;
+        case 'ram':
+          p.ram = fade;
           break;
         default:
           break;
@@ -957,7 +1002,18 @@ export class Mech {
       }
       return;
     }
-    w.visual(() => this.lowArmorFx(dt, w));
+    w.visual(() => {
+      this.lowArmorFx(dt, w);
+      this.snareFx(w);
+    });
+  }
+
+  /** Caught in a snare net: rings of light cinch around the frame (cosmetic — versus peers draw their own). */
+  private snareFx(w: World) {
+    if (this.snareT <= 0 || Math.random() > 0.35) return;
+    _p.set(this.pos.x, this.pos.y + rand(0.8, this.spec.height - 0.6), this.pos.z);
+    w.fx.ring(_p, this.spec.radius * 0.75, 0xe9b8ff, 0.22);
+    if (Math.random() < 0.3) w.fx.spark(_p, 3, 0xe9b8ff, 10, 0.4, 0.25);
   }
 
   /** Battle damage: smoke and sparks at low armor (cosmetic — both versus peers draw their own). */
@@ -1006,6 +1062,7 @@ export class Mech {
       a ? (a.lunge ? 1 : 0) | (a.hover ? 2 : 0) : 0,
       r2(this.en),
       (this.overheat ? 1 : 0) | (this.qbT > 0 ? 2 : 0) | (this.thrusting ? 4 : 0),
+      r2(this.snareT),
     ];
   }
 
@@ -1049,6 +1106,7 @@ export class Mech {
     this.overheat = (fl & 1) !== 0;
     this.qbT = fl & 2 ? QB_TIME : 0;
     this.thrusting = (fl & 4) !== 0;
+    this.snareT = a[27] ?? 0;
     if (a[17] < 0) {
       this.action = null;
       return;
@@ -1087,6 +1145,22 @@ export class Mech {
     this.model.root.rotation.y = this.yaw;
     this.model.update(this.pose, dt);
     this.model.root.updateMatrixWorld(true);
-    if (this.state !== 'dead') w.visual(() => this.lowArmorFx(dt, w));
+    if (this.state !== 'dead') {
+      w.visual(() => {
+        this.lowArmorFx(dt, w);
+        this.snareFx(w);
+      });
+    }
   }
+}
+
+/** A snared pilot's controls: turning, guarding and firing get through; moving, boosting and jumping don't. */
+function pinned(c: ControlFrame) {
+  resetControls(PINNED);
+  PINNED.turn = c.turn;
+  PINNED.guard = c.guard;
+  PINNED.fireLW = c.fireLW;
+  PINNED.fireRW = c.fireRW;
+  PINNED.fireCW = c.fireCW;
+  return PINNED;
 }

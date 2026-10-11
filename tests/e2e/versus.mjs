@@ -31,8 +31,10 @@ const ok = await waitFor(async () => (await scr(guest)).state === 'pick' && (awa
 console.log('connected in', ((Date.now() - t0) / 1000).toFixed(1), 's', JSON.stringify(await scr(host)), JSON.stringify(await scr(guest)));
 if (!ok) { console.log('host', JSON.stringify(await scr(host)), 'guest', JSON.stringify(await scr(guest))); console.log(errs.join('\n')); await browser.close(); process.exit(0); }
 await host.screenshot({ path: `${OUT}/vs-lobby-host.png` });
-// guest picks FUJIN, both ready
-await press(guest, 'ArrowRight'); await sleep(300);
+// the newer VRs, so their projectiles, poses and the snare go over the wire: host ARACHNE
+// (left from JEBE wraps round to the end of the roster), guest KONGO (one further left); both ready
+await press(host, 'ArrowLeft'); await sleep(300);
+await press(guest, 'ArrowLeft'); await sleep(300); await press(guest, 'ArrowLeft'); await sleep(300);
 await press(guest, 'Enter'); await sleep(200); await press(host, 'Enter');
 await sleep(600);
 const lobby = (p) => p.evaluate(() => { const s = window.__vo.app.screen; return { screen: s.constructor.name, state: s.state, my: s.myPick, myReady: s.myReady, rival: s.rivalPick, rivalReady: s.rivalReady, starting: s.starting, leaving: s.leaving, linkRole: s.link?.role, linkStatus: s.link?.status }; });
@@ -53,13 +55,39 @@ for (let i = 0; i < 3; i++) { console.log(JSON.stringify(await sample())); await
 await guest.screenshot({ path: `${OUT}/vs-guest-fight.png` });
 await host.screenshot({ path: `${OUT}/vs-host-fight.png` });
 await guest.keyboard.up('KeyW'); await guest.keyboard.up('KeyA'); await host.keyboard.up('KeyD');
+// the host's mines, drones and snare net, as the guest sees them: put the two face to face first
+await host.evaluate(() => {
+  const s = window.__vo.app.screen;
+  const [a, b] = s.mechs;
+  a.pos.set(38, 0, 30); a.vel.set(0, 0, 0); a.yaw = Math.PI;
+  b.pos.set(38, 0, -10); b.vel.set(0, 0, 0); b.yaw = 0; b.controlsEnabled = false;
+  for (const k of ['lw', 'rw', 'cw']) a.gauges[k] = 1;
+});
+const seen = new Set();
+let snared = 0;
+const watch = async (ms) => {
+  const t1 = Date.now();
+  while (Date.now() - t1 < ms) {
+    const g = await guest.evaluate(() => { const s = window.__vo.app.screen; return { kinds: s.world.projectiles.list.map((p) => p.kind), snare: s.mechs[1].snareT }; });
+    for (const k of g.kinds) seen.add(k);
+    snared = Math.max(snared, g.snare);
+    await sleep(80);
+  }
+};
+// the net first: a mine that floors the guest would let the net sail over it
+await press(host, 'KeyK'); await watch(1800);
+await press(host, 'KeyJ'); await watch(1500);
+await press(host, 'KeyL'); await watch(900);
+console.log('guest saw the new kit:', JSON.stringify({ kinds: [...seen].sort(), snared: +snared.toFixed(2) }));
+await host.evaluate(() => { window.__vo.app.screen.mechs[1].controlsEnabled = true; });
 // fast-forward: KO the guest on the host and confirm both see the round end
-await host.evaluate(() => { const s = window.__vo.app.screen; const m = s.mechs[1]; m.invuln = 0; m.takeHit({ damage: 99999, knock: 'down', dir: m.pos.clone().set(0, 0, 1), source: s.mechs[0], pos: m.pos.clone() }, s.world); });
+// (a mech that's down is untouchable: stand it up first)
+await host.evaluate(() => { const s = window.__vo.app.screen; const m = s.mechs[1]; m.invuln = 0; if (m.state === 'down' || m.state === 'getup') m.state = 'ground'; m.takeHit({ damage: 99999, knock: 'down', dir: m.pos.clone().set(0, 0, 1), source: s.mechs[0], pos: m.pos.clone() }, s.world); });
 const re = await waitFor(async () => (await scr(guest)).phase === 'roundEnd', 15000, 'guest roundEnd');
 console.log('guest saw round end:', !!re, JSON.stringify(await guest.evaluate(() => ({ ann: document.querySelector('.ann-text')?.textContent, wins: window.__vo.app.screen.wins }))));
 await guest.screenshot({ path: `${OUT}/vs-guest-roundend.png` });
 // round 2: KO the host's mech this time, then round 3 decides
-const ko = (idx) => host.evaluate((idx) => { const s = window.__vo.app.screen; const m = s.mechs[idx]; m.invuln = 0; m.takeHit({ damage: 99999, knock: 'down', dir: m.pos.clone().set(0, 0, 1), source: s.mechs[1 - idx], pos: m.pos.clone() }, s.world); }, idx);
+const ko = (idx) => host.evaluate((idx) => { const s = window.__vo.app.screen; const m = s.mechs[idx]; m.invuln = 0; if (m.state === 'down' || m.state === 'getup') m.state = 'ground'; m.takeHit({ damage: 99999, knock: 'down', dir: m.pos.clone().set(0, 0, 1), source: s.mechs[1 - idx], pos: m.pos.clone() }, s.world); }, idx);
 await waitFor(async () => (await scr(host)).phase === 'fight', 20000, 'r2');
 await ko(0);
 await waitFor(async () => (await scr(host)).phase === 'ready', 20000, 'r3 ready');

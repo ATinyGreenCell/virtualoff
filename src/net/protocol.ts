@@ -2,7 +2,7 @@ import type { ControlFrame } from '../core/input';
 import type { MechId, StageId } from '../game/specs';
 
 /** Bump whenever messages change shape; peers with different versions refuse to play. */
-export const PROTOCOL = 3;
+export const PROTOCOL = 4;
 export const APP_ID = 'virtual-off/versus/v1';
 
 export type Role = 'host' | 'guest';
@@ -95,8 +95,8 @@ export type SnapMsg = {
 export const PHASES = ['intro', 'ready', 'fight', 'finish', 'roundEnd', 'result'] as const;
 export const STATES = ['ground', 'dash', 'air', 'airdash', 'land', 'guard', 'stagger', 'down', 'getup', 'dead'] as const;
 export const SLOTS = ['lw', 'rw', 'cw'] as const;
-export const POSES = ['aimR', 'aimBoth', 'throwL', 'beam', 'cannon', 'missile', 'melee'] as const;
-export const PROJ_KINDS = ['bolt', 'shell', 'bomb', 'hyper', 'missile'] as const;
+export const POSES = ['aimR', 'aimBoth', 'throwL', 'beam', 'cannon', 'missile', 'melee', 'punchL', 'slam', 'ram'] as const;
+export const PROJ_KINDS = ['bolt', 'shell', 'bomb', 'hyper', 'missile', 'orb', 'mine', 'fist', 'net'] as const;
 
 export const r1 = (v: number) => Math.round(v * 10) / 10;
 export const r2 = (v: number) => Math.round(v * 100) / 100;

@@ -23,8 +23,8 @@ npm run test:e2e   # end-to-end browser suite (see Tests)
 
 ## Tests
 
-`npm run test:e2e` runs 17 browser tests against a dev server it starts itself, 8 at a time — just
-under two minutes:
+`npm run test:e2e` runs 18 browser tests against a dev server it starts itself, 8 at a time — about
+two minutes:
 
 - arcade flow (stages, continues, game over)
 - CPU vs CPU
@@ -38,6 +38,8 @@ under two minutes:
   dropping out and another taking over, rematch, and co-op (teams, no friendly fire, partner cam)
 - split-screen edge cases: double KO, resizing mid-fight, a frame failing mid-draw, co-op time-ups,
   continue through to the two-pilot ending
+- the roster: every VR's model, and each weapon of KESTREL, KONGO and ARACHNE doing its job (the
+  versus test also flies ARACHNE vs KONGO, so mines, drones and the snare go over the network)
 
 Dev-only URL switches keep it quick: `?fast` speeds up non-gameplay waits, `?noaudio` skips building
 the sound library, and `?grace=N` shortens the versus reconnect window. Production builds strip
@@ -143,11 +145,27 @@ Weapon gauges recharge independently.
 
 ## What's in it
 
-- **Two VRs:** JEBE (balanced assault: beam rifle, pulse bomb, hyper beam, beam saber) and FUJIN
-  (heavy artillery: shoulder cannons, homing cluster missiles, sweeping gale laser, hammer knuckle).
+- **Five VRs, each playing its own way:**
+  - **JEBE** — balanced assault: beam rifle, pulse bomb, homing hyper beam, beam saber.
+  - **FUJIN** — heavy artillery: shoulder cannons, homing cluster missiles, sweeping gale laser,
+    hammer knuckle.
+  - **KESTREL** — aerial interceptor: the fastest and lightest frame, and climbing and air boosting
+    cost it about half the EN, so it can stay up. Three-needle laser bursts, a fan of six swarm darts,
+    and a rail lance (a short charge, then a near-instant shot that knocks down). Wing-edge blade up
+    close.
+  - **KONGO** — brawler: a seven-pellet scatter gun that fades out past mid range; **boosting turns RW
+    into a shoulder ram** that charges about 35 units and knocks down; a homing rocket fist; and a quake
+    slam (a two-fisted smash on the ground; in the air, a straight-down dive that lands it) whose
+    shockwave runs along the ground: jump over it, or keep a wall in between. Its rams, uppercut and
+    slam shrug off light hits.
+  - **ARACHNE** — trapper: hunter drones that keep circling back at you (and swat bullets out of the
+    air), web mines that dig into the ground, blink for a moment, then go off when you walk near
+    (thrown across your path, or ringed around ARACHNE when you get close), and a snare net that pins
+    you in place for a couple of seconds: you can still turn, guard and shoot, but not move, boost,
+    jump or lunge (a front guard blocks it).
 - **Two stages:** AQUA HARBOR (daytime docks) and DUSK FOUNDRY (sunset industrial), each with its own
   layout, scenery and battle theme.
-- **Arcade mode:** fight the other VR on its home stage, then your own mirror image in alternate
+- **Arcade mode:** fight every other VR on its home stage, then your own mirror image in alternate
   colors. Best of three rounds, 60-second timer, continue countdown.
 - **Split-screen versus and co-op** on one screen with two controllers (see above).
 - **Versus mode** over a direct peer-to-peer link (see above).
@@ -172,7 +190,7 @@ src/
                settings, math & collision, Xbox detection
   render/      low-res renderer, canvas-generated textures, tapered-box geometry
   game/
-    specs.ts       mech stats, weapons, palettes
+    specs.ts       mech stats, weapons, melee, CPU-pilot hints, palettes
     mechModel.ts   procedural mech meshes (baked per joint) + procedural animation rig
     mech.ts        movement state machine, weapons, damage, knockdowns, versus snapshots
     weapons.ts     projectiles, homing, splash, the sustained laser, weapon timelines

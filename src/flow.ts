@@ -2,7 +2,7 @@ import type { App } from './app';
 import type { DeviceId } from './core/input';
 import { settings } from './core/settings';
 import { Battle, type BattleResult } from './game/battle';
-import { BOSS_PALETTES, FUJIN, JEBE, ROSTER, type MechId, type MechSpec, type Palette, type StageId } from './game/specs';
+import { BOSS_PALETTES, ROSTER, SPECS, type MechId, type MechSpec, type Palette, type StageId } from './game/specs';
 import type { NetLink } from './net/link';
 import { LocalScreen } from './ui/local';
 import { EndingScreen, SelectScreen, TitleScreen } from './ui/screens';
@@ -24,7 +24,6 @@ export interface LocalPick {
   mechs: [MechId, MechId];
 }
 
-const SPECS: Record<MechId, MechSpec> = { jebe: JEBE, fujin: FUJIN };
 const STAGE_IDS: StageId[] = ['harbor', 'foundry'];
 
 /** Screen-to-screen flow: arcade ladder, split-screen versus and co-op, and versus over a peer link. */

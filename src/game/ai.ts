@@ -71,7 +71,8 @@ export class AIController {
     cool.melee -= dt;
     const spec = me.spec;
     const dist = hdist(me.pos, foe.pos);
-    const pref = spec.id === 'fujin' ? [42, 85] : [26, 58];
+    const hints = spec.ai;
+    const pref = hints.range;
 
     // ---- defense
     this.scanThreats(me, w);
@@ -116,8 +117,10 @@ export class AIController {
     c.moveY = my;
 
     // ---- close in for a melee strike now and then (more often when the foe is stuck in recovery)
-    const foeRecovering = foe.state === 'land' || foe.state === 'stagger' || (foe.state === 'getup' && foe.stateT > 0.25);
-    const rushRate = (spec.id === 'jebe' ? 0.14 : 0.08) * T.aggression * (foeRecovering ? 4 : 1);
+    // a snared foe is a sitting duck too
+    const pinned = foe.snareT > 0.3;
+    const foeRecovering = foe.state === 'land' || foe.state === 'stagger' || (foe.state === 'getup' && foe.stateT > 0.25) || pinned;
+    const rushRate = hints.rush * T.aggression * (foeRecovering ? 4 : 1);
     if (this.rushT <= 0 && me.state === 'ground' && !me.action && dist < 65 && chance(rushRate, dt)) this.rushT = rand(1.4, 2.4);
     if (this.rushT > 0) {
       this.rushT -= dt;
@@ -158,18 +161,18 @@ export class AIController {
     const los = w.arena.lineOfSight(_a, _b);
     const free = me.lockedOn && !me.action;
     const foeOpen =
-      foe.state === 'land' || foe.state === 'stagger' || (foe.state === 'getup' && foe.stateT > 0.3) || foe.action?.slot === 'cw';
+      foe.state === 'land' || foe.state === 'stagger' || (foe.state === 'getup' && foe.stateT > 0.3) || foe.action?.slot === 'cw' || pinned;
     if (free && me.state !== 'dash') {
       if (dist < spec.meleeRange * 0.9 && foe.hittable && cool.melee <= 0 && chance(3 * T.aggression, dt)) {
         c.fireRW = true;
         cool.melee = 1.4;
-      } else if (me.gauges.cw >= 1 && cool.cw <= 0 && los && dist > 18 && chance(foeOpen ? 3 : T.cwRate, dt)) {
+      } else if (me.gauges.cw >= 1 && cool.cw <= 0 && los && dist >= hints.cw[0] && dist <= hints.cw[1] && chance(foeOpen ? 3 : T.cwRate, dt)) {
         c.fireCW = true;
         cool.cw = 3;
-      } else if (me.gauges.rw >= spec.weapons.rw.cost + 0.05 && cool.rw <= 0 && los && chance((foeOpen ? 4 : 1.6) * T.fireRate, dt)) {
+      } else if (me.gauges.rw >= spec.weapons.rw.cost + 0.05 && cool.rw <= 0 && los && dist <= hints.rw && chance((foeOpen ? 4 : 1.6) * T.fireRate, dt)) {
         c.fireRW = true;
         cool.rw = rand(0.35, 0.9) / T.fireRate;
-      } else if (me.gauges.lw >= spec.weapons.lw.cost && cool.lw <= 0 && chance((los ? 0.35 : 0.9) * T.fireRate, dt)) {
+      } else if (me.gauges.lw >= spec.weapons.lw.cost && cool.lw <= 0 && chance((pinned ? 4 : los ? 0.35 : 0.9) * hints.lw * T.fireRate, dt)) {
         c.fireLW = true;
         cool.lw = rand(1.4, 3);
       }
@@ -184,14 +187,17 @@ export class AIController {
       c.moveY = this.dashFwd;
       cool.dash = rand(1.1, 2.6) / T.aggression;
     }
-    if (me.state === 'dash' && me.stateT > 0.1 && me.stateT < 0.2 && me.lockedOn && los && me.gauges.rw >= spec.weapons.rw.cost && chance(4 * T.fireRate, dt)) {
+    // a dash attack — or, for a VR whose boosting RW is a charge, a ram: only from a forward dash in range
+    const [ram0, ram1] = hints.dashRW;
+    const ramOk = dist >= ram0 && dist <= ram1 && (ram1 > 900 || this.dashFwd > 0.3);
+    if (me.state === 'dash' && me.stateT > 0.1 && me.stateT < 0.2 && me.lockedOn && los && ramOk && me.gauges.rw >= spec.weapons.rw.cost && chance(4 * T.fireRate, dt)) {
       c.fireRW = true;
     }
-    if (me.state === 'ground' && !me.action && cool.jump <= 0 && chance(0.13, dt)) {
+    if (me.state === 'ground' && !me.action && cool.jump <= 0 && chance(hints.jump, dt)) {
       c.jump = c.jumpPressed = true;
       cool.jump = rand(2, 5);
     }
-    if (me.state === 'air' && Math.abs(me.vel.y) < 5 && me.lockedOn && los && !me.action && me.gauges.rw >= spec.weapons.rw.cost && chance(2 * T.fireRate, dt)) {
+    if (me.state === 'air' && Math.abs(me.vel.y) < 5 && me.lockedOn && los && dist <= hints.rw && !me.action && me.gauges.rw >= spec.weapons.rw.cost && chance(2 * T.fireRate, dt)) {
       c.fireRW = true;
     }
     return c;

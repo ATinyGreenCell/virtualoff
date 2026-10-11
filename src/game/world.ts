@@ -28,6 +28,8 @@ export class World {
   readonly shakes = [0, 0];
   time = 0;
   hitStopT = 0;
+  /** false once a round is decided (and until the next one starts): nothing can be damaged */
+  live = true;
   viewportHeight = 400;
   onDamageCb: ((m: Mech, dmg: number) => void) | null = null;
   /** versus host: sounds, shakes, hits and effects are mirrored here for the guest */
@@ -116,7 +118,7 @@ export class World {
   replay(e: NetEvent) {
     switch (e[0]) {
       case 's':
-        this.sound(e[1] as SfxName, _e.set(e[2] as number, e[3] as number, e[4] as number), e[5] as number);
+        this.sound(e[1] as SfxName, _e.set(e[2] as number, e[3] as number, e[4] as number), e[5] as number, (e[6] as number | undefined) ?? 1);
         break;
       case 'k':
         this.shake(e[1] as number, e.length > 2 ? _e.set(e[2] as number, e[3] as number, e[4] as number) : undefined);
@@ -174,10 +176,11 @@ export class World {
     return { volume, pan };
   }
 
-  sound(name: SfxName, pos: THREE.Vector3, vol = 1) {
-    this.emit(['s', name, r2(pos.x), r2(pos.y), r2(pos.z), r2(vol)]);
+  /** A sound at a place in the arena; `pitch` re-voices a shared effect for a different weapon. */
+  sound(name: SfxName, pos: THREE.Vector3, vol = 1, pitch = 1) {
+    this.emit(pitch === 1 ? ['s', name, r2(pos.x), r2(pos.y), r2(pos.z), r2(vol)] : ['s', name, r2(pos.x), r2(pos.y), r2(pos.z), r2(vol), r2(pitch)]);
     const s = this.soundParams(pos, vol);
-    audio.play(name, { volume: s.volume, pan: s.pan });
+    audio.play(name, pitch === 1 ? { volume: s.volume, pan: s.pan } : { volume: s.volume, pan: s.pan, pitch });
   }
 
   loopSound(name: LoopName): LoopHandle {

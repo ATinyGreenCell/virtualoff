@@ -16,7 +16,7 @@ const PORT = 5199;
 
 const noErrors = (o) => /--- errors ---\s*\nnone/.test(o);
 const TESTS = [
-  { name: 'versus', file: 'versus.mjs', est: 60, pass: (o) => /second match started: true/.test(o) && /guest reached title: true/.test(o) && noErrors(o) },
+  { name: 'versus', file: 'versus.mjs', est: 65, pass: (o) => /second match started: true/.test(o) && /guest reached title: true/.test(o) && /guest saw the new kit: \{"kinds":\[[^\]]*"mine"[^\]]*"net"[^\]]*"orb"[^\]]*\],"snared":[1-9]/.test(o) && noErrors(o) },
   { name: 'outage', file: 'outage.mjs', est: 60, pass: (o) => /\(FROZEN\)/.test(o) && /lost\/lost/.test(o) && noErrors(o) },
   { name: 'net-loss', file: 'net-loss.mjs', est: 45, pass: (o) => (o.match(/OK \(none lost\)/g) || []).length === 2 && /resumed: true/.test(o) && noErrors(o) },
   { name: 'cpu-vs-cpu', file: 'cpu-vs-cpu.mjs', args: ['jebe', 'hard'], est: 45, pass: (o) => /"phase":"result"/.test(o) && /no errors/.test(o) },
@@ -32,7 +32,8 @@ const TESTS = [
   { name: 'touch', file: 'touch.mjs', est: 30, pass: (o) => /touch OK/.test(o) && noErrors(o) },
   { name: 'split-vs', file: 'local.mjs', args: ['versus'], est: 75, pass: (o) => /local OK/.test(o) && noErrors(o) },
   { name: 'split-coop', file: 'local.mjs', args: ['coop'], est: 40, pass: (o) => /local OK/.test(o) && noErrors(o) },
-  { name: 'split-edge', file: 'local.mjs', args: ['edges'], est: 70, pass: (o) => /local OK/.test(o) && noErrors(o) },
+  { name: 'split-edge', file: 'local.mjs', args: ['edges'], est: 110, pass: (o) => /local OK/.test(o) && noErrors(o) },
+  { name: 'roster', file: 'roster.mjs', est: 45, pass: (o) => /roster OK/.test(o) && noErrors(o) },
 ].filter((t) => !only || only.includes(t.name));
 
 async function startServer() {

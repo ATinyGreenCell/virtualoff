@@ -7,8 +7,8 @@ import { saveSettings, settings, type Difficulty, type PerfMode, type VideoMode 
 import { ceremony } from '../core/testmode';
 import type { Flow } from '../flow';
 import { Mech } from '../game/mech';
-import { MechModel, makePose } from '../game/mechModel';
-import { FUJIN, JEBE, ROSTER, type MechSpec, type Palette } from '../game/specs';
+import { MechModel, makePose, type MechPose } from '../game/mechModel';
+import { ROSTER, type MechId, type MechSpec, type Palette } from '../game/specs';
 import { World } from '../game/world';
 import { IS_XBOX, XBOX_HINT } from '../core/platform';
 import { canvasTexture } from '../render/textures';
@@ -98,8 +98,11 @@ export class TitleScreen implements Screen {
   ) {
     this.cam = new THREE.PerspectiveCamera(46, app.renderer.aspect, 0.3, 2400);
     this.world = new World('harbor', this.cam);
-    const a = new Mech(JEBE, JEBE.palette, false);
-    const b = new Mech(FUJIN, FUJIN.palette, false);
+    // two different VRs square off behind the logo, a new pair each visit
+    const i = Math.floor(Math.random() * ROSTER.length);
+    const j = (i + 1 + Math.floor(Math.random() * (ROSTER.length - 1))) % ROSTER.length;
+    const a = new Mech(ROSTER[i], ROSTER[i].palette, false);
+    const b = new Mech(ROSTER[j], ROSTER[j].palette, false);
     a.target = b;
     b.target = a;
     a.reset(new THREE.Vector3(-7, 0, 7), 0);
@@ -334,6 +337,24 @@ export class TitleScreen implements Screen {
   }
 }
 
+/** The pose a VR strikes when it's chosen: weapon raised, arms spread, or fists overhead. */
+function strikePose(p: MechPose, id: MechId, k: number) {
+  switch (id) {
+    case 'jebe':
+      p.aimR = k;
+      break;
+    case 'kestrel':
+      p.aimBoth = k;
+      break;
+    case 'kongo':
+      p.slamW = k;
+      p.slam = 0.3;
+      break;
+    default:
+      p.beam = k;
+  }
+}
+
 // ------------------------------------------------------------------ hangar (select + ending backdrop)
 
 function gridTexture() {
@@ -498,6 +519,7 @@ export class SelectScreen implements Screen {
         <div><em>LW</em>${spec.weapons.lw.name}</div>
         <div><em>RW</em>${spec.weapons.rw.name}</div>
         <div><em>CW</em>${spec.weapons.cw.name}</div>
+        ${spec.special ? `<div><em>${spec.special.label}</em>${spec.special.name}</div>` : ''}
         <div><em>MELEE</em>${spec.melee.name}</div>
       </div>`;
     info.classList.remove('swap');
@@ -554,9 +576,7 @@ export class SelectScreen implements Screen {
       // swing round to face the pilot and strike a pose
       const target = Math.round(this.spin / (Math.PI * 2)) * Math.PI * 2 + 0.8;
       this.spin += (target - this.spin) * Math.min(1, dt * 5);
-      const isJebe = ROSTER[this.idx].id === 'jebe';
-      this.pose.aimR = isJebe ? Math.min(1, this.chosenT * 3) : 0;
-      this.pose.beam = isJebe ? 0 : Math.min(1, this.chosenT * 3);
+      strikePose(this.pose, ROSTER[this.idx].id, Math.min(1, this.chosenT * 3));
       this.pose.charge = Math.min(1, this.chosenT * 1.2);
       this.pose.thrust = this.chosenT < 0.6 ? 0.6 : 0;
       if (this.chosenT > 1.6) {

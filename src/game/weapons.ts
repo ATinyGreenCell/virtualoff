@@ -1,9 +1,9 @@
 import * as THREE from 'three';
-import { clamp, forwardOf, rand, rotateToward, segSegDist2 } from '../core/math';
+import { clamp, forwardOf, hdist, rand, rotateToward, segSegDist2 } from '../core/math';
 import { glowTexture } from '../render/textures';
-import { PROJ_KINDS, r1, r2, r3, type BeamSnap, type ProjSnap } from '../net/protocol';
+import { POSES, PROJ_KINDS, r1, r2, r3, type BeamSnap, type ProjSnap } from '../net/protocol';
 import type { Mech } from './mech';
-import type { Slot } from './specs';
+import type { MechId, Slot } from './specs';
 import type { World } from './world';
 
 export type Knock = 'none' | 'stagger' | 'down';
@@ -16,10 +16,12 @@ export interface Hit {
   source: Mech | null;
   pos: THREE.Vector3;
   heavy?: boolean;
+  /** pins the target in place this long (a snare net) */
+  snare?: number;
 }
 
 export type Variant = 'ground' | 'dash' | 'air';
-export type PoseKind = 'aimR' | 'aimBoth' | 'throwL' | 'beam' | 'cannon' | 'missile' | 'melee';
+export type PoseKind = (typeof POSES)[number];
 
 export interface ActionEvent {
   t: number;
@@ -52,6 +54,14 @@ export interface Action {
   lunge?: { until: number; speed: number };
   hitWindow?: [number, number];
   hasHit?: boolean;
+  /** what the hit window deals (melee: the VR's melee damage) */
+  hitDamage?: number;
+  /** light hits don't stagger the mech out of this action (a brawler's lunge) */
+  armor?: boolean;
+  /** a committed plunge: thrusters and hovering can't slow the fall */
+  dive?: boolean;
+  /** runs once if the mech touches down while this action is on (an air slam lands its blow) */
+  onLand?: (m: Mech, w: World) => void;
   /** fired while walking: the mech keeps moving but the shot guides less than a planted shot */
   moving?: boolean;
   events: ActionEvent[];
@@ -59,7 +69,7 @@ export interface Action {
 
 // ------------------------------------------------------------------ projectiles
 
-export type ProjKind = 'bolt' | 'shell' | 'bomb' | 'hyper' | 'missile';
+export type ProjKind = (typeof PROJ_KINDS)[number];
 
 export interface Projectile {
   id: number;
@@ -86,6 +96,17 @@ export interface Projectile {
   trail: number;
   /** cosmetic clock (blinking, spin) — advanced by the visual pass on host and guest alike */
   vt: number;
+  /** keeps steering at the target even after flying past it (hunter drones circle back) */
+  chase: boolean;
+  /** lands and stays put instead of bursting on whatever it hits (a mine) */
+  stick: boolean;
+  stuck: boolean;
+  /** age when it dug in */
+  stuckAt: number;
+  /** a planted mine goes off when an enemy comes this close, once it has been down `arm` seconds */
+  trigger: number;
+  arm: number;
+  snare: number;
 }
 
 export interface SpawnOpts {
@@ -103,14 +124,23 @@ export interface SpawnOpts {
   life?: number;
   splash?: number;
   color?: number;
+  chase?: boolean;
+  stick?: boolean;
+  trigger?: number;
+  arm?: number;
+  snare?: number;
+  /** most of this kind one mech can have out at once: the oldest goes when another is fired */
+  cap?: number;
 }
 
-const POWER: Record<ProjKind, number> = { bolt: 1, shell: 1, missile: 1, bomb: 2, hyper: 3 };
+/** clash strength: big shots erase small ones (hunter drones out-muscle bullets: they shield their owner) */
+const POWER: Record<ProjKind, number> = { bolt: 1, shell: 1, missile: 1, bomb: 2, hyper: 3, orb: 2, mine: 2, fist: 2, net: 2 };
 
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
 const _c = new THREE.Vector3();
 const _d = new THREE.Vector3();
+const _e = new THREE.Vector3();
 const _want = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
@@ -164,6 +194,10 @@ export class Projectiles {
       ['hyper', colors],
       ['bomb', [0xff4a3a]],
       ['missile', [0xffb04a]],
+      ['orb', colors.slice(0, 1)],
+      ['mine', colors.slice(0, 1)],
+      ['fist', colors.slice(0, 1)],
+      ['net', colors.slice(0, 1)],
     ];
     for (const [kind, cs] of kinds) {
       for (const c of cs) {
@@ -228,6 +262,53 @@ export class Projectiles {
         g.add(flame);
         break;
       }
+      case 'orb': {
+        // hunter drone: a bright core in a shell, a spinning ring around it
+        g.add(new THREE.Mesh(this.geo(new THREE.IcosahedronGeometry(0.45, 0)), additive(0xffffff)));
+        g.add(new THREE.Mesh(this.geo(new THREE.IcosahedronGeometry(0.85, 0)), additive(color, 0.55)));
+        const ring = new THREE.Mesh(this.geo(new THREE.TorusGeometry(1.15, 0.08, 4, 16)), additive(color, 0.85));
+        ring.name = 'ring';
+        g.add(ring, glowSprite(color, 3));
+        break;
+      }
+      case 'mine': {
+        // a squat disc with three claws and a blinking light
+        g.add(new THREE.Mesh(this.geo(new THREE.CylinderGeometry(0.95, 1.1, 0.35, 8)), new THREE.MeshLambertMaterial({ color: 0x2a2c34, flatShading: true })));
+        const clawMat = new THREE.MeshLambertMaterial({ color: 0x4a4d58, flatShading: true });
+        const clawGeo = this.geo(new THREE.BoxGeometry(0.18, 0.12, 0.9).translate(0, -0.05, 0.95));
+        for (let i = 0; i < 3; i++) {
+          const claw = new THREE.Mesh(clawGeo, clawMat);
+          claw.rotation.y = (i / 3) * Math.PI * 2;
+          g.add(claw);
+        }
+        const blink = glowSprite(color, 2.6);
+        blink.position.y = 0.35;
+        blink.name = 'blink';
+        g.add(blink);
+        break;
+      }
+      case 'fist': {
+        // rocket fist: knuckles first, a flame behind
+        g.add(new THREE.Mesh(this.geo(new THREE.BoxGeometry(1.25, 1.15, 1.4)), new THREE.MeshLambertMaterial({ color: 0x3c3f4a, flatShading: true })));
+        g.add(new THREE.Mesh(this.geo(new THREE.BoxGeometry(1.3, 0.5, 0.4).translate(0, 0.15, 0.75)), new THREE.MeshLambertMaterial({ color, flatShading: true })));
+        const flame = glowSprite(0xffb04a, 3);
+        flame.position.z = -1.2;
+        g.add(flame);
+        break;
+      }
+      case 'net': {
+        // snare net: a spinning hexagon strung across with glowing strands
+        const hex = new THREE.Mesh(this.geo(new THREE.TorusGeometry(1.9, 0.12, 4, 6)), additive(color, 0.9));
+        hex.name = 'ring';
+        const strandGeo = this.geo(new THREE.BoxGeometry(3.6, 0.08, 0.08));
+        for (let i = 0; i < 3; i++) {
+          const strand = new THREE.Mesh(strandGeo, additive(color, 0.7));
+          strand.rotation.z = (i / 3) * Math.PI;
+          hex.add(strand);
+        }
+        g.add(hex, glowSprite(color, 4.5));
+        break;
+      }
     }
     g.traverse((o) => {
       const m = (o as THREE.Mesh).material;
@@ -237,6 +318,17 @@ export class Projectiles {
   }
 
   spawn(owner: Mech, o: SpawnOpts) {
+    if (o.cap) {
+      // the list is in firing order, so the first one found is the oldest
+      let n = 0;
+      let oldest: Projectile | null = null;
+      for (const q of this.list) {
+        if (!q.alive || q.owner !== owner || q.kind !== o.kind) continue;
+        n++;
+        oldest ??= q;
+      }
+      if (oldest && n >= o.cap) this.release(oldest);
+    }
     const color = o.color ?? owner.palette.beam;
     const key = `${o.kind}:${color}`;
     const pool = this.pools.get(key) ?? [];
@@ -269,6 +361,13 @@ export class Projectiles {
       alive: true,
       trail: 0,
       vt: 0,
+      chase: o.chase ?? false,
+      stick: o.stick ?? false,
+      stuck: false,
+      stuckAt: 0,
+      trigger: o.trigger ?? 0,
+      arm: o.arm ?? 0,
+      snare: o.snare ?? 0,
     };
     obj.position.copy(p.pos);
     obj.lookAt(_a.copy(p.pos).add(p.vel));
@@ -334,6 +433,13 @@ export class Projectiles {
           alive: true,
           trail: 0,
           vt: 0,
+          chase: false,
+          stick: false,
+          stuck: false,
+          stuckAt: 0,
+          trigger: 0,
+          arm: 0,
+          snare: 0,
         };
         this.list.push(p);
       }
@@ -394,14 +500,19 @@ export class Projectiles {
     for (const p of this.list) {
       if (!p.alive) continue;
       p.age += dt;
+      if (p.stuck) {
+        // a planted mine: armed a moment after it lands, it goes off when an enemy comes close (or at the end of its life)
+        if ((p.age - p.stuckAt > p.arm && this.enemyNear(p, w)) || p.age > p.life) this.impact(p, w, null);
+        continue;
+      }
       p.prev.copy(p.pos);
       const tgt = p.owner.target;
       if (p.homing > 0 && p.age > p.homingDelay && tgt.alive) {
         const speed = p.vel.length();
         _dir.copy(p.vel).divideScalar(speed || 1);
         tgt.centerInto(_want).sub(p.pos);
-        // stop guiding once the projectile has passed the target
-        if (_want.dot(_dir) > 0) {
+        // stop guiding once the projectile has passed the target (hunter drones turn round instead)
+        if (p.chase || _want.dot(_dir) > 0) {
           _want.normalize();
           rotateToward(_dir, _want, p.homing * dt);
           p.vel.copy(_dir).multiplyScalar(speed);
@@ -432,7 +543,21 @@ export class Projectiles {
         this.impact(p, w, hitMech);
       } else if (tw >= 0) {
         p.pos.lerpVectors(p.prev, p.pos, tw);
-        this.impact(p, w, null);
+        if (p.stick) {
+          if (p.pos.y - w.arena.groundAt(p.pos.x, p.pos.z, 0.5, p.pos.y + 0.3) < 0.6) {
+            // a mine digs in where it lands
+            p.stuck = true;
+            p.stuckAt = p.age;
+            p.vel.set(0, 0, 0);
+            p.pos.y += 0.2;
+            w.fx.dust(p.pos, 4, w.dustColor, 1, 1.4);
+          } else {
+            // glanced off a wall (or the arena's edge): back off it and drop straight down
+            _dir.set(p.vel.x, 0, p.vel.z).normalize();
+            p.pos.addScaledVector(_dir, -0.4);
+            p.vel.set(0, Math.min(0, p.vel.y), 0);
+          }
+        } else this.impact(p, w, null);
       } else if (p.age > p.life) {
         if (p.splash > 0) this.impact(p, w, null);
         else this.release(p);
@@ -467,6 +592,17 @@ export class Projectiles {
     w.visual(() => this.updateVisuals(dt, w));
   }
 
+  /** An enemy close enough to set this mine off. */
+  private enemyNear(p: Projectile, w: World) {
+    for (const m of w.mechs) {
+      if (m.team === p.owner.team || !m.alive || !m.hittable) continue;
+      m.axis(_b, _c);
+      const r = p.trigger + m.spec.radius * 0.8;
+      if (segSegDist2(p.pos, p.pos, _b, _c) < r * r) return true;
+    }
+    return false;
+  }
+
   /** Placement, spin, blinking and trails — everything the eye sees but the rules don't care about. */
   updateVisuals(dt: number, w: World) {
     for (const p of this.list) if (p.alive) this.visualStep(p, dt, w);
@@ -476,8 +612,17 @@ export class Projectiles {
   private visualStep(p: Projectile, dt: number, w: World) {
     p.vt += dt;
     p.obj.position.copy(p.pos);
-    p.obj.lookAt(_a.copy(p.pos).add(p.vel));
     p.trail -= dt;
+    if (p.kind === 'mine') {
+      // planted (it has stopped: the versus guest only sees the velocity): flat on the ground, blinking
+      const planted = p.vel.lengthSq() < 0.01;
+      if (planted) p.obj.rotation.set(0, p.obj.rotation.y, 0);
+      else p.obj.rotation.set(p.vt * 9, p.vt * 4, 0);
+      const blink = p.obj.getObjectByName('blink');
+      if (blink) blink.visible = Math.floor(p.vt * (planted ? 3 : 12)) % 2 === 0;
+      return;
+    }
+    p.obj.lookAt(_a.copy(p.pos).add(p.vel));
     if (p.kind === 'missile' && p.trail <= 0) {
       p.trail = 0.03;
       w.fx.smoke(p.pos, 1, 1.1, 0xd8d4d0, 0.7);
@@ -499,6 +644,27 @@ export class Projectiles {
     } else if (p.kind === 'shell' && p.trail <= 0) {
       p.trail = 0.03;
       w.fx.trail(p.pos, p.color, 1.6, 0.15, 0.5);
+    } else if (p.kind === 'orb') {
+      const ring = p.obj.getObjectByName('ring');
+      if (ring) {
+        ring.rotation.z += dt * 7;
+        ring.rotation.x = Math.sin(p.vt * 3) * 0.6;
+      }
+      if (p.trail <= 0) {
+        p.trail = 0.05;
+        w.fx.trail(p.pos, p.color, 1.2, 0.25, 0.5);
+      }
+    } else if (p.kind === 'net') {
+      const ring = p.obj.getObjectByName('ring');
+      if (ring) ring.rotation.z += dt * 11;
+      if (p.trail <= 0) {
+        p.trail = 0.03;
+        w.fx.trail(p.pos, p.color, 2.2, 0.2, 0.5);
+      }
+    } else if (p.kind === 'fist' && p.trail <= 0) {
+      p.trail = 0.03;
+      w.fx.smoke(p.pos, 1, 1.4, 0x8a8480, 0.6);
+      w.fx.trail(p.pos, 0xffb04a, 1.8, 0.16);
     }
   }
 
@@ -527,19 +693,22 @@ export class Projectiles {
       }
     } else if (mech) {
       const dir = new THREE.Vector3(p.vel.x, 0, p.vel.z).normalize();
-      const landed = mech.takeHit({ damage: p.damage, knock: p.knock, dir, source: p.owner, pos: pos.clone() }, w);
+      const heavy = p.kind === 'fist';
+      const landed = mech.takeHit({ damage: p.damage, knock: p.knock, dir, source: p.owner, pos: pos.clone(), heavy, snare: p.snare || undefined }, w);
       w.fx.flash(pos, landed ? 0xffffff : 0x9ad8ff, p.kind === 'hyper' ? 8 : 4, 0.12, true);
       w.fx.spark(pos, landed ? 14 : 6, p.color, 26);
-      if (p.kind === 'missile' || p.kind === 'shell') {
-        w.fx.explosion(pos, 1.6, 0xffa040);
+      if (p.kind === 'missile' || p.kind === 'shell' || p.kind === 'fist') {
+        w.fx.explosion(pos, p.kind === 'fist' ? 2.4 : 1.6, 0xffa040);
         w.sound('explosionSmall', pos, 0.7);
       }
+      if (p.kind === 'fist') w.shake(0.4, pos);
+      if (p.kind === 'net') w.fx.ring(pos, 2.2, p.color, 0.4);
     } else {
       // hit the floor or a block
       w.fx.flash(pos, p.color, p.kind === 'hyper' ? 9 : 3.5, 0.12, true);
       w.fx.spark(pos, 8, p.color, 18);
-      if (p.kind === 'missile' || p.kind === 'shell') {
-        w.fx.explosion(pos, 1.5, 0xffa040);
+      if (p.kind === 'missile' || p.kind === 'shell' || p.kind === 'fist') {
+        w.fx.explosion(pos, p.kind === 'fist' ? 2.2 : 1.5, 0xffa040);
         w.sound('explosionSmall', pos, 0.5);
       } else if (p.kind === 'hyper') {
         w.fx.explosion(pos, 3.5, p.color);
@@ -1032,30 +1201,480 @@ function fujinLaser(variant: Variant): Action {
   });
 }
 
-export function makeFireAction(m: Mech, slot: Slot, variant: Variant): Action {
-  if (m.spec.id === 'jebe') {
-    if (slot === 'rw') return jebeRifle(variant);
-    if (slot === 'lw') return jebeBomb(variant);
-    return jebeHyper(variant);
+// ------------------------------------------------------------------ KESTREL
+
+/** NEEDLE LASER: a quick three-needle burst (two side by side out of a boost). */
+function kestrelNeedles(variant: Variant): Action {
+  const needle = (spread: number, dmg: number, knock: Knock, homing: number) => (m: Mech, w: World) => {
+    if (m.action?.moving) homing *= 0.6;
+    m.model.muzzleR.getWorldPosition(mz);
+    aimDir(m, mz, 205, 0.5, dv);
+    yawed(dv, spread, _dir);
+    w.projectiles.spawn(m, { kind: 'bolt', pos: mz, vel: _dir.multiplyScalar(205), radius: 0.5, damage: dmg, knock, homing, homingDelay: 0.04, life: 1.5 });
+    w.fx.flash(mz, m.palette.beam, 2.4, 0.06, true);
+    w.sound('rifle', mz, 0.7, 1.45);
+    m.pose.recoil = 0.6;
+  };
+  if (variant === 'dash') {
+    return action({
+      kind: 'fire',
+      slot: 'rw',
+      variant,
+      pose: 'aimR',
+      duration: 0.3,
+      keepDash: true,
+      turnMul: 1,
+      events: [
+        {
+          t: 0.05,
+          run: (m, w) => {
+            needle(-0.05, 18, 'stagger', 0.5)(m, w);
+            needle(0.05, 18, 'stagger', 0.5)(m, w);
+          },
+        },
+      ],
+    });
   }
-  if (slot === 'rw') return fujinCannon(variant);
-  if (slot === 'lw') return fujinMissiles(variant);
-  return fujinLaser(variant);
+  const homing = variant === 'air' ? 1.1 : 0.7;
+  return action({
+    kind: 'fire',
+    slot: 'rw',
+    variant,
+    pose: 'aimR',
+    duration: 0.36,
+    moveMul: 0.95,
+    hover: variant === 'air',
+    // only the last needle of the burst staggers
+    events: [0.05, 0.11, 0.17].map((t, i) => ({ t, run: needle(0, 15, i === 2 ? 'stagger' : 'none', homing) })),
+  });
+}
+
+/** SWARM DARTS: six micro-missiles fanning out of the wing pods, quick to turn. */
+function kestrelDarts(variant: Variant): Action {
+  const events: ActionEvent[] = [];
+  for (let i = 0; i < 6; i++) {
+    events.push({
+      t: 0.08 + i * 0.035,
+      run: (m, w) => {
+        m.model.missilePods[i % 2].getWorldPosition(mz);
+        forwardOf(m.yaw, _d);
+        const side = i % 2 === 0 ? 1 : -1;
+        // each pair flares out wider than the last
+        const fan = 6 + (i >> 1) * 4;
+        dv.set(0, 10 + (i >> 1) * 3, 0)
+          .addScaledVector(_d, 18)
+          .add(_a.set(_d.z * side * fan, 0, -_d.x * side * fan));
+        w.projectiles.spawn(m, {
+          kind: 'missile',
+          pos: mz,
+          vel: dv,
+          radius: 0.6,
+          damage: 12,
+          knock: 'stagger',
+          homing: 3.4,
+          homingDelay: 0.16,
+          accel: 100,
+          maxSpeed: 100,
+          life: 2.0,
+          color: m.palette.flame,
+        });
+        w.sound('missileLaunch', mz, 0.45, 1.5);
+      },
+    });
+  }
+  return action({ kind: 'fire', slot: 'lw', variant, pose: 'missile', duration: 0.5, moveMul: 0.7, keepDash: variant === 'dash', hover: variant === 'air', events });
+}
+
+/** RAIL LANCE: a short charge, then a near-instant straight shot that knocks down. */
+function kestrelLance(variant: Variant): Action {
+  const chargeT = variant === 'dash' ? 0.26 : variant === 'air' ? 0.3 : 0.38;
+  const speed = 240;
+  return action({
+    kind: 'fire',
+    slot: 'cw',
+    variant,
+    pose: 'aimBoth',
+    duration: chargeT + 0.42,
+    moveMul: 0,
+    slide: 3,
+    turnMul: 0.8,
+    hover: variant === 'air',
+    cancelAfterEvents: false,
+    charge: [0, chargeT],
+    events: [
+      { t: 0, run: (m, w) => w.sound('hyperCharge', m.pos, 0.8, 1.3) },
+      {
+        t: chargeT,
+        run: (m, w) => {
+          m.model.muzzleR.getWorldPosition(mz);
+          aimDir(m, mz, speed, 0.6, dv);
+          w.projectiles.spawn(m, {
+            kind: 'hyper',
+            pos: mz,
+            vel: dv.multiplyScalar(speed),
+            radius: 1.2,
+            damage: variant === 'ground' ? 110 : 95,
+            knock: 'down',
+            homing: 0.12,
+            homingDelay: 0.05,
+            life: 1.4,
+          });
+          w.fx.flash(mz, m.palette.beam, 7, 0.16, true);
+          w.sound('hyperShot', mz, 0.9, 1.5);
+          w.shake(0.25, mz);
+          m.pose.recoil = 1.4;
+        },
+      },
+    ],
+  });
+}
+
+// ------------------------------------------------------------------ KONGO
+
+/** SCATTER GUN: seven pellets in a wide cone that fade out past mid range. */
+function kongoScatter(variant: Variant): Action {
+  return action({
+    kind: 'fire',
+    slot: 'rw',
+    variant,
+    pose: 'aimR',
+    duration: 0.5,
+    moveMul: 0.85,
+    hover: variant === 'air',
+    events: [
+      {
+        t: 0.1,
+        run: (m, w) => {
+          m.model.muzzleR.getWorldPosition(mz);
+          aimDir(m, mz, 150, 0.2, dv);
+          for (let i = -3; i <= 3; i++) {
+            yawed(dv, i * 0.07 + rand(-0.015, 0.015), _dir);
+            _dir.y += rand(-0.04, 0.04);
+            w.projectiles.spawn(m, { kind: 'shell', pos: mz, vel: _dir.normalize().multiplyScalar(150), radius: 0.55, damage: 16, knock: 'stagger', life: 0.4 });
+          }
+          w.fx.flash(mz, m.palette.beam, 6, 0.1, true);
+          w.fx.smoke(mz, 2, 1.6, 0x6a6460, 0.5);
+          w.sound('cannon', mz, 1, 1.3);
+          w.shake(0.12, mz);
+          m.pose.recoil = 1.2;
+        },
+      },
+    ],
+  });
+}
+
+/** SHOULDER RAM (the scatter gun's boost variant): a long armored charge that knocks down. */
+function kongoRam(): Action {
+  return action({
+    kind: 'melee',
+    slot: 'rw',
+    variant: 'dash',
+    pose: 'ram',
+    duration: 0.62,
+    moveMul: 0,
+    turnMul: 0,
+    cancelAfterEvents: false,
+    lunge: { until: 0.48, speed: 70 },
+    hitWindow: [0.06, 0.5],
+    hitDamage: 105,
+    armor: true,
+    events: [{ t: 0, run: (m, w) => w.sound('dash', m.pos, 1, 0.8) }],
+  });
+}
+
+/** ROCKET FIST: the left fist flies off, homing, and floors whatever it reaches. */
+function kongoFist(variant: Variant): Action {
+  return action({
+    kind: 'fire',
+    slot: 'lw',
+    variant,
+    pose: 'punchL',
+    duration: 0.62,
+    moveMul: 0.5,
+    keepDash: variant === 'dash',
+    hover: variant === 'air',
+    events: [
+      {
+        t: 0.2,
+        run: (m, w) => {
+          m.model.muzzleL.getWorldPosition(mz);
+          aimDir(m, mz, 90, 0.4, dv);
+          w.projectiles.spawn(m, {
+            kind: 'fist',
+            pos: mz,
+            vel: dv.multiplyScalar(60),
+            radius: 1.4,
+            damage: 80,
+            knock: 'down',
+            homing: 2.1,
+            homingDelay: 0.12,
+            accel: 120,
+            maxSpeed: 115,
+            life: 2.4,
+            color: m.palette.accent,
+          });
+          w.fx.flash(mz, 0xffd080, 4, 0.1, true);
+          w.sound('missileLaunch', mz, 1, 0.7);
+          m.pose.recoil = 1;
+        },
+      },
+    ],
+  });
+}
+
+/**
+ * QUAKE SLAM: on the ground, both fists overhead and hammered down — a shockwave along the floor. In the
+ * air, a committed straight-down dive (no thrusters, no hover) that lands the blow when it touches down;
+ * if it hasn't landed by the end, it fizzles.
+ */
+function kongoSlam(variant: Variant): Action {
+  if (variant === 'air') {
+    return action({
+      kind: 'fire',
+      slot: 'cw',
+      variant,
+      pose: 'slam',
+      duration: 1.3,
+      moveMul: 0,
+      turnMul: 0.3,
+      cancelAfterEvents: false,
+      charge: [0, 0.3],
+      dive: true,
+      armor: true,
+      onLand: quake,
+      events: [
+        {
+          t: 0.12,
+          run: (m, w) => {
+            m.vel.set(0, Math.min(m.vel.y, -62), 0);
+            w.sound('airDash', m.pos, 1, 0.7);
+          },
+        },
+      ],
+    });
+  }
+  return action({
+    kind: 'fire',
+    slot: 'cw',
+    variant,
+    pose: 'slam',
+    duration: 1.0,
+    moveMul: 0,
+    slide: 2.5,
+    turnMul: 0.3,
+    cancelAfterEvents: false,
+    charge: [0, 0.42],
+    armor: true,
+    events: [{ t: 0.48, run: quake }],
+  });
+}
+
+const QUAKE_RADIUS = 18;
+
+/** The slam's shockwave: hits everything on the ground nearby, hardest at the center. */
+function quake(m: Mech, w: World) {
+  for (const e of w.mechs) {
+    if (e.team === m.team || !e.alive || !e.hittable) continue;
+    const d = hdist(m.pos, e.pos);
+    // it runs along the ground: jump and it passes under you
+    if (d > QUAKE_RADIUS + e.spec.radius || Math.abs(e.pos.y - m.pos.y) > 7) continue;
+    // and a wall in between stops it
+    _a.set(m.pos.x, m.pos.y + 1, m.pos.z);
+    _b.set(e.pos.x, e.pos.y + 1, e.pos.z);
+    if (!w.arena.lineOfSight(_a, _b)) continue;
+    const dir = new THREE.Vector3(e.pos.x - m.pos.x, 0, e.pos.z - m.pos.z);
+    if (dir.lengthSq() < 1e-4) forwardOf(m.yaw, dir);
+    dir.normalize();
+    const f = 1 - 0.45 * clamp(d / QUAKE_RADIUS, 0, 1);
+    e.takeHit({ damage: 150 * f, knock: 'down', dir, source: m, pos: e.centerInto(new THREE.Vector3()), heavy: true }, w);
+  }
+  _c.set(m.pos.x, m.pos.y + 0.3, m.pos.z);
+  w.fx.ring(_c, QUAKE_RADIUS / 2.2, m.palette.beam, 0.6);
+  w.fx.ring(_c, QUAKE_RADIUS / 3.5, 0xffd080, 0.4);
+  w.fx.explosion(_c, 3.2, 0xffa040);
+  w.fx.dust(m.pos, 26, w.dustColor, 6, 3.4);
+  w.sound('explosionBig', m.pos, 1, 0.7);
+  w.shake(1.1, m.pos);
+  w.hitStop(0.06);
+}
+
+// ------------------------------------------------------------------ ARACHNE
+
+/** HUNTER DRONES: slow orbs that keep circling back at the target until they burn out. */
+function arachneDrones(variant: Variant): Action {
+  const count = variant === 'dash' ? 1 : 2;
+  const events: ActionEvent[] = [];
+  for (let i = 0; i < count; i++) {
+    events.push({
+      t: 0.12 + i * 0.1,
+      run: (m, w) => {
+        m.model.missilePods[i % 2].getWorldPosition(mz);
+        forwardOf(m.yaw, _d);
+        const side = i % 2 === 0 ? 1 : -1;
+        dv.set(0, 12, 0)
+          .addScaledVector(_d, 10)
+          .add(_a.set(_d.z * side * 10, 0, -_d.x * side * 10));
+        w.projectiles.spawn(m, {
+          kind: 'orb',
+          pos: mz,
+          vel: dv,
+          radius: 0.9,
+          damage: 34,
+          knock: 'stagger',
+          homing: 2.1,
+          homingDelay: 0.35,
+          accel: 45,
+          maxSpeed: 50,
+          life: 4.5,
+          chase: true,
+          cap: 6,
+        });
+        w.fx.flash(mz, m.palette.beam, 2.5, 0.08);
+        w.sound('missileLaunch', mz, 0.5, 1.7);
+      },
+    });
+  }
+  return action({ kind: 'fire', slot: 'rw', variant, pose: 'missile', duration: 0.5, moveMul: 0.75, keepDash: variant === 'dash', hover: variant === 'air', events });
+}
+
+/** WEB MINES: three mines lobbed across the target's path; they dig in and wait. */
+function arachneMines(variant: Variant): Action {
+  return action({
+    kind: 'fire',
+    slot: 'lw',
+    variant,
+    pose: 'throwL',
+    duration: 0.6,
+    moveMul: 0.6,
+    keepDash: variant === 'dash',
+    hover: variant === 'air',
+    events: [
+      {
+        t: 0.26,
+        run: (m, w) => {
+          m.model.muzzleL.getWorldPosition(mz);
+          const g = 42;
+          const tgt = m.target;
+          // someone already close: ring yourself with the mines instead, so a rusher runs into them
+          const close = tgt.alive && hdist(m.pos, tgt.pos) < 22;
+          if (close) _c.set(m.pos.x, m.groundY, m.pos.z);
+          else if (m.lockedOn) _c.set(tgt.pos.x, Math.max(0, tgt.pos.y), tgt.pos.z);
+          else {
+            forwardOf(m.yaw, _d);
+            _c.copy(mz).addScaledVector(_d, 40);
+            _c.y = 0;
+          }
+          const dist = Math.hypot(_c.x - mz.x, _c.z - mz.z);
+          const T = close ? 0.5 : clamp(dist / 55, 0.6, 1.4);
+          if (m.lockedOn && !close) {
+            _c.x += tgt.vel.x * T * 0.8;
+            _c.z += tgt.vel.z * T * 0.8;
+          }
+          // spread across the line of the throw, or around you at close quarters
+          _d.set(_c.z - mz.z, 0, mz.x - _c.x).normalize();
+          for (let k = 0; k < 3; k++) {
+            if (close) {
+              // one toward the threat, one to each side of it
+              const ang = Math.atan2(tgt.pos.x - m.pos.x, tgt.pos.z - m.pos.z) + (k - 1) * 1.6;
+              _e.set(_c.x + Math.sin(ang) * 7.5, _c.y, _c.z + Math.cos(ang) * 7.5);
+            } else _e.copy(_c).addScaledVector(_d, (k - 1) * 9);
+            dv.set((_e.x - mz.x) / T, (_e.y - mz.y) / T + 0.5 * g * T, (_e.z - mz.z) / T);
+            w.projectiles.spawn(m, {
+              kind: 'mine',
+              pos: mz,
+              vel: dv,
+              radius: 0.9,
+              damage: 80,
+              knock: 'down',
+              gravity: g,
+              splash: 7.5,
+              life: 10,
+              stick: true,
+              trigger: 6.5,
+              arm: 0.35,
+              cap: 6,
+            });
+          }
+          w.sound('bombThrow', mz, 1, 1.15);
+        },
+      },
+    ],
+  });
+}
+
+/** SNARE NET: a slow homing net that pins whatever it catches for a moment (a frontal guard blocks it). */
+function arachneNet(variant: Variant): Action {
+  const chargeT = variant === 'ground' ? 0.3 : 0.24;
+  return action({
+    kind: 'fire',
+    slot: 'cw',
+    variant,
+    pose: 'aimBoth',
+    duration: chargeT + 0.45,
+    moveMul: 0,
+    slide: 3,
+    turnMul: 0.8,
+    hover: variant === 'air',
+    cancelAfterEvents: false,
+    charge: [0, chargeT],
+    events: [
+      { t: 0, run: (m, w) => w.sound('laserCharge', m.pos, 0.6, 1.6) },
+      {
+        t: chargeT,
+        run: (m, w) => {
+          m.model.muzzleR.getWorldPosition(mz);
+          aimDir(m, mz, 95, 0.5, dv);
+          w.projectiles.spawn(m, {
+            kind: 'net',
+            pos: mz,
+            vel: dv.multiplyScalar(95),
+            radius: 2.6,
+            damage: 50,
+            knock: 'none',
+            snare: 2.4,
+            homing: 1.6,
+            homingDelay: 0.05,
+            life: 2.4,
+          });
+          w.fx.flash(mz, m.palette.beam, 6, 0.14, true);
+          w.sound('hyperShot', mz, 0.7, 1.35);
+          m.pose.recoil = 1;
+        },
+      },
+    ],
+  });
+}
+
+// ------------------------------------------------------------------ dispatch
+
+type Arsenal = Record<Slot, (variant: Variant) => Action>;
+
+const ARSENAL: Record<MechId, Arsenal> = {
+  jebe: { rw: jebeRifle, lw: jebeBomb, cw: jebeHyper },
+  fujin: { rw: fujinCannon, lw: fujinMissiles, cw: fujinLaser },
+  kestrel: { rw: kestrelNeedles, lw: kestrelDarts, cw: kestrelLance },
+  kongo: { rw: (v) => (v === 'dash' ? kongoRam() : kongoScatter(v)), lw: kongoFist, cw: kongoSlam },
+  arachne: { rw: arachneDrones, lw: arachneMines, cw: arachneNet },
+};
+
+export function makeFireAction(m: Mech, slot: Slot, variant: Variant): Action {
+  return ARSENAL[m.spec.id][slot](variant);
 }
 
 export function makeMeleeAction(m: Mech, slot: Slot): Action {
-  const jebe = m.spec.id === 'jebe';
+  const d = m.spec.melee;
   return action({
     kind: 'melee',
     slot,
     variant: 'ground',
     pose: 'melee',
-    duration: jebe ? 0.74 : 0.82,
+    duration: d.duration,
     moveMul: 0,
     turnMul: 0,
     cancelAfterEvents: false,
-    lunge: { until: jebe ? 0.28 : 0.32, speed: jebe ? 42 : 34 },
-    hitWindow: jebe ? [0.26, 0.42] : [0.3, 0.46],
-    events: [{ t: jebe ? 0.22 : 0.26, run: (mm, w) => w.sound('swing', mm.pos) }],
+    lunge: d.lunge,
+    hitWindow: d.hit,
+    armor: d.armor,
+    events: [{ t: d.swing, run: (mm, w) => w.sound('swing', mm.pos, 1, d.pitch ?? 1) }],
   });
 }

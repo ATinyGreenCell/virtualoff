@@ -415,6 +415,8 @@ if (part === 'edges') {
   await sleep(300);
   await kill(2);
   await waitPhase('roundEnd');
+  // the win is counted on the round end's first frame: wait for the score, not just the phase
+  await waitFor(() => page.evaluate(() => window.__vo.app.screen.wins[0] > 0), 3000, 'team score');
   const solo = await battle();
   await waitPhase('fight');
   const back = await page.evaluate(() => { const s = window.__vo.app.screen; const m = s.mechs[1]; return { alive: m.alive, visible: m.model.root.visible, hp: m.hp, follow: s.views[1].follow === m }; });
@@ -458,7 +460,9 @@ if (part === 'edges') {
   await press(1, A);
   await freshBattle();
   const again = await battle();
-  for (let stage = 0; stage < 2; stage++) {
+  // one boss per VR in the roster: clear them all
+  const stages = await page.evaluate(() => window.__vo.app.screen.setup.stageCount);
+  for (let stage = 0; stage < stages; stage++) {
     for (let r = 0; r < 2; r++) {
       await waitPhase('fight');
       await kill(2);
@@ -469,7 +473,7 @@ if (part === 'edges') {
     console.log(`stage ${stage + 1} result: ${t}`);
     await mark();
     await press(0, A);
-    if (stage === 0) await freshBattle();
+    if (stage < stages - 1) await freshBattle();
   }
   const ending = await waitFor(() => page.evaluate(() => { const s = window.__vo.app.screen; return s.constructor.name === 'EndingScreen' ? { models: s.models.length, sub: document.querySelector('.end-sub')?.textContent } : null; }), 8000, 'ending');
   check('continue, stage clear, two-pilot ending', cont === 'CONTINUE?' && again.stageNo === 0 && JSON.stringify(again.wins) === '[0,0]' && ending?.models === 2 && !!ending?.sub.includes('PILOTS'), JSON.stringify({ cont, again, ending }));

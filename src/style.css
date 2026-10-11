@@ -1165,7 +1165,8 @@ body {
 
 .sel-weapons em {
   display: inline-block;
-  width: 64px;
+  min-width: 64px;
+  margin-right: 10px;
   font-style: normal;
   font-family: var(--display);
   color: var(--orange);
@@ -1178,6 +1179,7 @@ body {
   transform: translateX(-50%);
   display: flex;
   gap: 12px;
+  max-width: 96vw;
 }
 
 .chip {
@@ -1302,6 +1304,17 @@ body {
   font-family: var(--display);
   font-size: 26px;
   color: var(--yellow);
+}
+
+@media (max-width: 900px) {
+  .chip {
+    font-size: 15px;
+    padding: 6px 12px;
+    letter-spacing: 2px;
+  }
+  .sel-roster {
+    gap: 6px;
+  }
 }
 
 @media (max-width: 760px) {

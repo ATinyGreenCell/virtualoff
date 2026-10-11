@@ -5,7 +5,7 @@ import { IS_XBOX, XBOX_HINT } from '../core/platform';
 import { ceremony } from '../core/testmode';
 import type { Flow, LocalPick } from '../flow';
 import { MechModel, makePose } from '../game/mechModel';
-import { FUJIN, JEBE, type MechId, type MechSpec } from '../game/specs';
+import { MECH_IDS, SPECS, type MechId } from '../game/specs';
 import { Hangar } from './screens';
 
 type Mode = LocalPick['mode'];
@@ -19,8 +19,7 @@ interface Seat {
   ready: boolean;
 }
 
-const SPECS: Record<MechId, MechSpec> = { jebe: JEBE, fujin: FUJIN };
-const IDS: MechId[] = ['jebe', 'fujin'];
+const IDS = MECH_IDS;
 
 const MODE_INFO: Record<Mode, { title: string; line: string }> = {
   versus: { title: 'VERSUS · BEST OF THREE', line: '1P vs 2P on one screen · random stage' },

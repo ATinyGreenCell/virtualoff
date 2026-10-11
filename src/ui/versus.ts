@@ -2,7 +2,7 @@ import { audio } from '../audio/audio';
 import type { App, Screen } from '../app';
 import type { Flow } from '../flow';
 import { MechModel, makePose } from '../game/mechModel';
-import { FUJIN, JEBE, type MechId, type MechSpec, type StageId } from '../game/specs';
+import { MECH_IDS, SPECS, type MechId, type StageId } from '../game/specs';
 import { ceremony } from '../core/testmode';
 import { NetLink, preloadNet, type LinkStatus } from '../net/link';
 import { isValidCode, makeRoomCode, normalizeCode, type LobbyMsg } from '../net/protocol';
@@ -10,8 +10,7 @@ import { Hangar } from './screens';
 
 type State = 'menu' | 'host' | 'join' | 'connecting' | 'pick' | 'error';
 
-const SPECS: Record<MechId, MechSpec> = { jebe: JEBE, fujin: FUJIN };
-const IDS: MechId[] = ['jebe', 'fujin'];
+const IDS = MECH_IDS;
 const STAGE_IDS: StageId[] = ['harbor', 'foundry'];
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -312,7 +311,7 @@ export class VersusScreen implements Screen {
 
   private onLobby(m: LobbyMsg) {
     if (m.t === 'pick') {
-      if (m.mech !== 'jebe' && m.mech !== 'fujin') return;
+      if (!IDS.includes(m.mech)) return;
       this.rivalPick = m.mech;
       const wasReady = this.rivalReady;
       this.rivalReady = m.ready;

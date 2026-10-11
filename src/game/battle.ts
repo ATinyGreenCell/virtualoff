@@ -253,11 +253,13 @@ export class Battle implements Screen {
     }
     this.local = this.views[0].mech;
     this.remote = this.views[0].foe;
+    // the CPU sharpens along the ladder, reaching the same edge on the last stage however long it is
+    const ramp = setup.stageCount > 1 ? (setup.stageNo / (setup.stageCount - 1)) * 0.6 : 0;
     this.ai =
       this.mode === 'cpu'
-        ? new AIController(setup.difficulty, setup.stageNo * 0.6)
+        ? new AIController(setup.difficulty, ramp)
         : this.mode === 'coop'
-          ? new AIController(setup.difficulty, setup.stageNo * 0.6 + BOSS.edge)
+          ? new AIController(setup.difficulty, ramp + BOSS.edge)
           : null;
     this.flashEl = document.createElement('div');
     this.flashEl.className = 'screen-flash';
@@ -353,6 +355,7 @@ export class Battle implements Screen {
       this.mechs[1].reset(sp[1].pos, sp[1].yaw);
     }
     for (const m of this.mechs) m.controlsEnabled = false;
+    this.world.live = false;
     this.world.projectiles.clear();
     this.world.fx.clear();
     this.timeLeft = ROUND_TIME;
@@ -512,6 +515,7 @@ export class Battle implements Screen {
         if (t > 1.3 && this.once('ready')) this.ui('ready');
         if (t > 2.7) {
           this.ui('go');
+          this.world.live = true;
           for (const m of this.mechs) m.controlsEnabled = true;
           this.app.input.flush();
           this.enter('fight');
@@ -597,6 +601,7 @@ export class Battle implements Screen {
 
   private endFight() {
     for (const m of this.mechs) m.controlsEnabled = false;
+    this.world.live = false;
     this.boomWatch = this.mechs.filter((m) => !m.alive && !m.exploded);
     const scorers = this.boss ? this.mechs.filter((m) => m !== this.boss) : [this.local];
     for (const s of scorers) {
@@ -1088,6 +1093,7 @@ export class Battle implements Screen {
       if (this.phase === 'fight') {
         if (!me.alive) hud.setStatus(v.follow !== me ? 'PARTNER CAM' : 'DESTROYED', 'down');
         else if (me.state === 'down' || me.state === 'getup') hud.setStatus('DOWN', 'down');
+        else if (me.snareT > 0) hud.setStatus('SNARED', 'danger');
         else if (me.state === 'guard') hud.setStatus('GUARD', 'guard');
         else if (me.hpFrac < 0.25) hud.setStatus('WARNING', 'danger');
         else hud.setStatus('');
