@@ -22,8 +22,11 @@ export class World {
   readonly projectiles: Projectiles;
   readonly mechs: Mech[] = [];
   readonly dustColor: number;
+  /** every camera the world is watched through — split screen has one per view; [0] is the main one */
+  cameras: THREE.PerspectiveCamera[];
+  /** screen shake per camera */
+  readonly shakes = [0, 0];
   time = 0;
-  shakeAmt = 0;
   hitStopT = 0;
   viewportHeight = 400;
   onDamageCb: ((m: Mech, dmg: number) => void) | null = null;
@@ -36,15 +39,31 @@ export class World {
     stage: StageId,
     readonly camera: THREE.PerspectiveCamera,
   ) {
+    this.cameras = [camera];
     this.arena = new Arena(this.scene, stage);
     this.fx = new Effects(this.scene);
     this.projectiles = new Projectiles(this.scene);
     this.dustColor = stage === 'harbor' ? 0xdfe4ec : 0xc49a8a;
   }
 
-  add(m: Mech) {
+  /** Screen shake of the main camera. */
+  get shakeAmt() {
+    return this.shakes[0];
+  }
+
+  /** Add a mech. Mechs on the same team can't hurt each other (one team each unless told otherwise). */
+  add(m: Mech, team = this.mechs.length) {
+    m.team = team;
     this.mechs.push(m);
     this.scene.add(m.model.root);
+  }
+
+  /** Split screen: set up the sky, block fades and particle sizes for view `i` before it's drawn. */
+  prepareView(i: number, viewportHeight: number) {
+    const cam = this.cameras[i];
+    this.arena.setSkyCenter(cam.position);
+    this.arena.applyFades(i);
+    this.fx.setView(cam, viewportHeight);
   }
 
   /** Versus host: start (or stop, with null) mirroring every gameplay event. */
@@ -90,7 +109,7 @@ export class World {
   private tick(dt: number) {
     this.fx.update(dt, this.camera, this.viewportHeight);
     this.arena.update(this.time, this.camera.position);
-    this.shakeAmt = Math.max(0, this.shakeAmt - dt * 2.8);
+    for (let i = 0; i < this.shakes.length; i++) this.shakes[i] = Math.max(0, this.shakes[i] - dt * 2.8);
   }
 
   /** Versus guest: play back something the host recorded. */
@@ -139,10 +158,19 @@ export class World {
   }
 
   soundParams(pos: THREE.Vector3, vol = 1) {
-    const d = this.camera.position.distanceTo(pos);
+    // split screen: heard from whichever camera is closest, panned less (two players share the speakers)
+    let cam = this.cameras[0];
+    let d = cam.position.distanceTo(pos);
+    for (let i = 1; i < this.cameras.length; i++) {
+      const di = this.cameras[i].position.distanceTo(pos);
+      if (di < d) {
+        d = di;
+        cam = this.cameras[i];
+      }
+    }
     const volume = vol * clamp(1.15 - d / 260, 0.12, 1);
-    _v.copy(pos).applyMatrix4(this.camera.matrixWorldInverse);
-    const pan = clamp(_v.x / Math.max(10, Math.abs(_v.z)), -1, 1) * 0.75;
+    _v.copy(pos).applyMatrix4(cam.matrixWorldInverse);
+    const pan = clamp(_v.x / Math.max(10, Math.abs(_v.z)), -1, 1) * (this.cameras.length > 1 ? 0.4 : 0.75);
     return { volume, pan };
   }
 
@@ -159,9 +187,11 @@ export class World {
   shake(amount: number, pos?: THREE.Vector3) {
     this.emit(pos ? ['k', r2(amount), r2(pos.x), r2(pos.y), r2(pos.z)] : ['k', r2(amount)]);
     if (reducedMotion) amount *= 0.35;
-    const d = pos ? this.camera.position.distanceTo(pos) : 0;
-    const k = clamp(1.25 - d / 110, 0.15, 1);
-    this.shakeAmt = Math.min(1.6, this.shakeAmt + amount * k);
+    for (let i = 0; i < this.cameras.length; i++) {
+      const d = pos ? this.cameras[i].position.distanceTo(pos) : 0;
+      const k = clamp(1.25 - d / 110, 0.15, 1);
+      this.shakes[i] = Math.min(1.6, this.shakes[i] + amount * k);
+    }
   }
 
   hitStop(t: number) {

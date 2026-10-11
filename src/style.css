@@ -1657,3 +1657,270 @@ body {
   border-top: 2px solid rgba(47, 224, 255, 0.45);
   box-shadow: 0 -10px 40px rgba(4, 6, 24, 0.6);
 }
+
+/* ------------------------------------------------------------------ split screen */
+
+.split-divider {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 8px;
+  transform: translateY(-50%);
+  background: #05081c;
+  border-top: 2px solid rgba(47, 224, 255, 0.85);
+  border-bottom: 2px solid rgba(47, 224, 255, 0.85);
+  box-shadow: 0 0 14px rgba(47, 224, 255, 0.45);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* each player's half of the screen; their HUD lives inside it */
+.hud-view {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 50%;
+  overflow: hidden;
+}
+
+.hud-view.v0 {
+  top: 0;
+}
+
+.hud-view.v1 {
+  top: 50%;
+}
+
+.hud.split .hud-top {
+  padding: 10px 18px 0;
+}
+
+.hud.split .pl {
+  width: min(34vw, 470px);
+}
+
+.hud.split .pl-name {
+  font-size: 17px;
+  margin-bottom: 2px;
+}
+
+.hud.split .pl-tag {
+  font-size: 11px;
+}
+
+.hud.split .hpbar {
+  height: 16px;
+}
+
+.hud.split .pl-row {
+  margin-top: 1px;
+}
+
+.hud.split .hp-num {
+  font-size: 18px;
+  min-width: 40px;
+}
+
+.hud.split .hp-label {
+  font-size: 9px;
+  letter-spacing: 2px;
+}
+
+.hud.split .pip {
+  width: 11px;
+  height: 11px;
+}
+
+.hud.split .timer-box {
+  min-width: 84px;
+}
+
+.hud.split .timer {
+  font-size: 40px;
+}
+
+.hud.split .timer-label,
+.hud.split .round-label {
+  font-size: 9px;
+  letter-spacing: 3px;
+}
+
+.hud.split .status {
+  top: 84px;
+  font-size: 17px;
+}
+
+.hud.split .gauges {
+  bottom: 10px;
+  gap: 14px;
+}
+
+.hud.split .gauge {
+  width: 132px;
+}
+
+.hud.split .g-cw {
+  width: 152px;
+}
+
+.hud.split .g-label {
+  font-size: 14px;
+}
+
+.hud.split .g-name {
+  display: none;
+}
+
+.hud.split .en {
+  bottom: 46px;
+  width: 280px;
+}
+
+.hud.split .announce {
+  top: 28%;
+}
+
+.hud.split .ann-text {
+  font-size: clamp(34px, 6.5vw, 84px);
+}
+
+.hud.split .ann-text.go {
+  font-size: clamp(44px, 9vw, 116px);
+}
+
+.hud.split .stage-banner {
+  top: 56%;
+  padding: 8px 0;
+}
+
+.hud.split .sb-vs {
+  font-size: clamp(22px, 3.4vw, 38px);
+}
+
+.hud.split .dmg-vignette {
+  box-shadow: inset 0 0 9vmin rgba(255, 30, 30, 0.95);
+}
+
+/* co-op: the partner's armor, small under your own */
+.ally {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  padding: 0 4px;
+  font-size: 11px;
+  letter-spacing: 2px;
+}
+
+.ally-tag {
+  font-family: var(--display);
+  font-size: 10px;
+  color: var(--ink);
+  background: var(--cyan);
+  padding: 0 5px;
+  transform: skewX(-15deg);
+  text-shadow: none;
+}
+
+.ally-mech {
+  opacity: 0.85;
+}
+
+.ally-bar {
+  width: 120px;
+  height: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  background: rgba(4, 8, 40, 0.7);
+  transform: skewX(-24deg);
+  overflow: hidden;
+}
+
+.ally-fill {
+  height: 100%;
+  background: linear-gradient(to bottom, #d8fff6, #10b890);
+  transform-origin: left center;
+  transition: transform 0.08s linear;
+}
+
+.ally.danger .ally-fill {
+  background: linear-gradient(to bottom, #ffd0d0, #ff4a4a);
+}
+
+.ally.out {
+  opacity: 0.45;
+}
+
+.pause-note:empty {
+  display: none;
+}
+
+.xbox-note {
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: #a8ffa8;
+}
+
+.pause-note.alert {
+  color: var(--yellow);
+  max-width: min(640px, 90vw);
+  line-height: 1.5;
+}
+
+/* split-screen lobby */
+.lc-panel .vs-btn small {
+  font-family: var(--ui);
+  font-size: 13px;
+  letter-spacing: 2px;
+  opacity: 0.8;
+  margin-left: 8px;
+}
+
+.lc-desc {
+  min-height: 20px;
+  font-size: 14px;
+  letter-spacing: 1px;
+  color: #cfe8ff;
+  text-shadow: 0 2px 0 #000;
+}
+
+.lc-seat .lc-dev {
+  min-height: 15px;
+  margin-top: 3px;
+  font-size: 11px;
+  letter-spacing: 3px;
+  color: var(--cyan);
+  opacity: 0.8;
+}
+
+.lc-seat.open .vs-name b {
+  opacity: 0.4;
+}
+
+.lc-seat .lc-state {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.lc-hint {
+  font-size: 12px;
+  letter-spacing: 2px;
+  opacity: 0.75;
+}
+
+.xbox-hint {
+  max-width: min(640px, 92vw);
+  padding: 6px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  letter-spacing: 1px;
+  text-align: center;
+  color: #e6ffe6;
+  background: rgba(8, 52, 12, 0.88);
+  border: 1px solid rgba(120, 220, 120, 0.7);
+  text-shadow: 0 1px 0 #000;
+}
+
+.xbox-hint b {
+  color: #a8ffa8;
+}

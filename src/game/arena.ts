@@ -247,6 +247,15 @@ function barrierTexture() {
   );
 }
 
+function fadeMats(mats: (THREE.MeshLambertMaterial | THREE.MeshBasicMaterial)[], fade: number) {
+  const solid = fade > 0.995;
+  for (const m of mats) {
+    m.transparent = !solid;
+    m.depthWrite = solid;
+    m.opacity = fade;
+  }
+}
+
 export class Arena {
   readonly group = new THREE.Group();
   readonly boxes: Box[] = [];
@@ -258,7 +267,8 @@ export class Arena {
     { pos: new THREE.Vector3(0, 0, -72), yaw: 0 },
   ];
   private animators: ((t: number) => void)[] = [];
-  private occluders: { box: Box; mats: (THREE.MeshLambertMaterial | THREE.MeshBasicMaterial)[]; fade: number }[] = [];
+  /** fadeable blocks; `fade` is kept per view (split screen fades a block for one player only) */
+  private occluders: { box: Box; mats: (THREE.MeshLambertMaterial | THREE.MeshBasicMaterial)[]; fade: number[] }[] = [];
   private disposables: { dispose(): void }[] = [];
 
   constructor(
@@ -551,7 +561,7 @@ export class Arena {
     }
     const idx = this.occluders.length;
     for (const c of this.group.children.slice(firstChild)) c.userData.occluder = idx;
-    this.occluders.push({ box, mats, fade: 1 });
+    this.occluders.push({ box, mats, fade: [1, 1] });
   }
 
   private buildHarborScenery() {
@@ -711,6 +721,11 @@ export class Arena {
     for (const a of this.animators) a(t);
   }
 
+  /** Split screen: center the sky on the camera of the view about to be drawn. */
+  setSkyCenter(cameraPos: THREE.Vector3) {
+    this.sky.position.copy(cameraPos);
+  }
+
   /** Height of the walkable surface under a footprint, considering only surfaces at or below `fromY`. */
   groundAt(x: number, z: number, r: number, fromY: number) {
     let g = 0;
@@ -790,8 +805,11 @@ export class Arena {
     }
   }
 
-  /** Fade blocks that sit between the camera and any of the given points (the player's mech). */
-  updateOcclusion(cam: THREE.Vector3, points: THREE.Vector3[], dt: number) {
+  /**
+   * Fade blocks that sit between the camera and any of the given points (the player's mech). Each
+   * split-screen view keeps its own fades; view 0 applies them straight away, others via applyFades.
+   */
+  updateOcclusion(cam: THREE.Vector3, points: THREE.Vector3[], dt: number, view = 0) {
     const k = 1 - Math.exp(-12 * dt);
     for (const o of this.occluders) {
       const b = o.box;
@@ -799,17 +817,18 @@ export class Arena {
       let blocked = false;
       if (!inside) for (const p of points) if (segAABB(cam, p, b.min, b.max, 0.6) >= 0) blocked = true;
       const want = blocked ? 0.22 : 1;
-      if (Math.abs(o.fade - want) < 0.003) {
-        if (o.fade === want) continue;
-        o.fade = want;
-      } else o.fade += (want - o.fade) * k;
-      const solid = o.fade > 0.995;
-      for (const m of o.mats) {
-        m.transparent = !solid;
-        m.depthWrite = solid;
-        m.opacity = o.fade;
-      }
+      const cur = o.fade[view];
+      if (Math.abs(cur - want) < 0.003) {
+        if (cur === want) continue;
+        o.fade[view] = want;
+      } else o.fade[view] = cur + (want - cur) * k;
+      if (view === 0) fadeMats(o.mats, o.fade[0]);
     }
+  }
+
+  /** Split screen: show every block the way view `view` sees it (call before drawing that view). */
+  applyFades(view: number) {
+    for (const o of this.occluders) fadeMats(o.mats, o.fade[view]);
   }
 
   lineOfSight(a: THREE.Vector3, b: THREE.Vector3) {

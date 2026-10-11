@@ -11,6 +11,12 @@ export const BASE = process.env.E2E_BASE ?? 'http://127.0.0.1:5173/';
 export const OUT = path.join(path.dirname(new URL(import.meta.url).pathname), '.out');
 fs.mkdirSync(OUT, { recursive: true });
 
+/**
+ * Versus pairs through a handful of public Nostr relays, and one of them being down is normal: pairing
+ * goes through the others, but the browser logs every failed connection attempt. Not a game error.
+ */
+export const relayNoise = (text) => /WebSocket connection to 'wss:\/\/[^']+' failed/.test(text);
+
 /** The game URL with the dev-only test switches: always ?fast, plus ?noaudio unless the test listens. */
 export const url = ({ audio = false } = {}) => `${BASE}?fast${audio ? '' : '&noaudio'}`;
 

@@ -5,6 +5,7 @@ import '@fontsource/chakra-petch/latin-700.css';
 import './style.css';
 import { App } from './app';
 import { audio } from './audio/audio';
+import { IS_XBOX } from './core/platform';
 import { TouchControls } from './core/touch';
 import { Flow } from './flow';
 import { preloadNet } from './net/link';
@@ -17,6 +18,23 @@ if (/(?:^|[#&])vs=/.test(location.hash)) void preloadNet().catch(() => undefined
 const unlockAudio = () => audio.unlock();
 for (const type of ['pointerdown', 'keydown', 'touchend'] as const) {
   window.addEventListener(type, unlockAudio, { capture: true, passive: true });
+}
+
+// Edge on Xbox, in its default "browsing controls" mode, takes B to mean "back a page". Keep one
+// history entry of our own on top so a stray B never leaves the game. It's pushed on the first real
+// input because browsers skip entries a page added without one.
+if (IS_XBOX) {
+  const guard = () => history.pushState({ vo: 1 }, '');
+  let armed = false;
+  const arm = () => {
+    if (armed) return;
+    armed = true;
+    guard();
+  };
+  for (const type of ['pointerdown', 'keydown'] as const) window.addEventListener(type, arm, { capture: true, passive: true });
+  window.addEventListener('popstate', () => {
+    if (armed) guard();
+  });
 }
 
 async function loadFonts() {

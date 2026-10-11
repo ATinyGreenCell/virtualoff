@@ -8,6 +8,8 @@ export interface Screen {
   dispose(): void;
   /** The page lost focus or was hidden — pause if that matters for this screen. */
   suspend?(): void;
+  /** split screen (two views stacked); the renderer switches over when the screen goes live */
+  readonly split?: boolean;
 }
 
 /** Implemented by the on-screen touch controls (src/core/touch.ts). */
@@ -125,6 +127,7 @@ export class App {
       } catch (err) {
         console.error('[virtual-off] dispose failed', err);
       }
+      this.renderer.setViews(this.screen.split ? 2 : 1);
       this.input.flush();
     }
     if (this.renderer.lost || !this.screen) return;
@@ -145,21 +148,15 @@ export class App {
       for (let i = 0; i < steps; i++) {
         this.screen.update(h);
         if (this.pending) break;
-        if (i === 0) this.clearEdges();
+        // one-shot presses must only be seen by the first sub-step of a frame
+        if (i === 0) this.input.clearEdges();
       }
+      this.renderer.gl.info.reset();
       this.screen.render();
     } catch (err) {
       this.handleError(err, now);
     }
   };
-
-  /** One-shot presses must only be seen by the first sub-step of a frame. */
-  private clearEdges() {
-    const c = this.input.controls;
-    c.jumpPressed = c.dashPressed = c.fireLW = c.fireRW = c.fireCW = false;
-    const m = this.input.menu;
-    m.up = m.down = m.left = m.right = m.confirm = m.back = m.pause = m.any = false;
-  }
 
   private handleError(err: unknown, now: number) {
     console.error('[virtual-off] frame error', err);

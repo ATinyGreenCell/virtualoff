@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer-core';
-import { CHROME, url, openVersusHost } from './harness.mjs';
+import { CHROME, url, openVersusHost, relayNoise } from './harness.mjs';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // a 10 s grace (dev-only switch) keeps the test short; both the resume and the give-up paths still run
 const BASE = `${url()}&grace=10`;
@@ -7,6 +7,7 @@ const launch = () => puppeteer.launch({ executablePath: CHROME, headless: true,
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-sandbox', '--mute-audio', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
 const [bh, bg] = [await launch(), await launch()];
 const errs = [];
+let relayErrs = 0;
 const mk = async (b, name) => {
   const p = await b.newPage();
   await p.setViewport({ width: 640, height: 360 });
@@ -19,7 +20,7 @@ const mk = async (b, name) => {
     window.RTCPeerConnection = class extends RPC { constructor(c) { super(c); this.addEventListener('datachannel', (e) => window.__dcs.push(e.channel)); } };
   });
   p.on('pageerror', (e) => errs.push(`[${name} pageerror] ${e.message}`));
-  p.on('console', (m) => { if (m.type() === 'error') errs.push(`[${name} console.error] ${m.text().slice(0, 200)}`); });
+  p.on('console', (m) => { if (m.type() !== 'error') return; if (relayNoise(m.text())) relayErrs++; else errs.push(`[${name} console.error] ${m.text().slice(0, 200)}`); });
   return p;
 };
 const press = async (p, k, hold = 60) => { await p.keyboard.down(k); await sleep(hold); await p.keyboard.up(k); };
@@ -63,5 +64,6 @@ const lost = await waitFor(async () => (await status()) === 'lost/lost', 30000);
 const titles = [await host.evaluate(() => document.querySelector('.overlay.result .ov-title')?.textContent), await guest.evaluate(() => document.querySelector('.overlay.result .ov-title')?.textContent)];
 console.log(`outage 25s gave up after ${((Date.now() - t2) / 1000).toFixed(1)} s: ${lost ? 'lost/lost' : await status()} | overlays: ${JSON.stringify(titles)}`);
 await offline(false);
+if (relayErrs) console.log(`(${relayErrs} failed connections to public Nostr relays ignored: one is down, pairing used the others)`);
 console.log('--- errors ---\n' + (errs.join('\n') || 'none'));
 await bh.close(); await bg.close();

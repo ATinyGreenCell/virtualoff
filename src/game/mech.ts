@@ -57,6 +57,13 @@ export class Mech {
   state: MechState = 'ground';
   stateT = 0;
   target!: Mech;
+  /** mechs on the same team can't hurt each other (set by World.add) */
+  team = 0;
+  /** damage multiplier on everything this mech hits with (co-op bosses hit harder) */
+  power = 1;
+  /** co-op boss: light hits don't stagger it, and it takes this many times the punishment before
+   *  going down — two players can't stun-lock it between them */
+  poise = 1;
   action: Action | null = null;
   invuln = 0;
   downValue = 0;
@@ -771,7 +778,7 @@ export class Mech {
 
   takeHit(h: Hit, w: World): boolean {
     if (!this.hittable) return false;
-    let dmg = h.damage;
+    let dmg = h.damage * (h.source ? h.source.power : 1);
     forwardOf(this.yaw, _f);
     const frontal = -(h.dir.x * _f.x + h.dir.z * _f.z) > 0.2;
     const guarded = this.state === 'guard' && frontal;
@@ -795,8 +802,8 @@ export class Mech {
     }
     if (guarded) return true;
     this.downValue += h.knock === 'down' ? 1000 : dmg;
-    if (this.downValue >= DOWN_THRESHOLD) this.knockDown(h, w);
-    else if (h.knock === 'stagger') this.stagger(h);
+    if (this.downValue >= DOWN_THRESHOLD * this.poise) this.knockDown(h, w);
+    else if (h.knock === 'stagger' && this.poise <= 1) this.stagger(h);
     return true;
   }
 

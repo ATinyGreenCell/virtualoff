@@ -74,7 +74,7 @@ export class AIController {
     const pref = spec.id === 'fujin' ? [42, 85] : [26, 58];
 
     // ---- defense
-    this.scanThreats(me, foe, w);
+    this.scanThreats(me, w);
     if (this.dodge) {
       this.dodge.t -= dt;
       if (this.dodge.t <= 0) {
@@ -197,13 +197,14 @@ export class AIController {
     return c;
   }
 
-  private scanThreats(me: Mech, foe: Mech, w: World) {
+  /** Dodge incoming shots from any enemy (co-op: either player). */
+  private scanThreats(me: Mech, w: World) {
     if (this.seen.size > 300) this.seen.clear();
     if (this.dodge || this.dashHold > 0) return;
     if (me.state !== 'ground' && me.state !== 'air') return;
     me.centerInto(_a);
     for (const p of w.projectiles.list) {
-      if (p.owner !== foe || this.seen.has(p.id)) continue;
+      if (p.owner.team === me.team || this.seen.has(p.id)) continue;
       _rel.subVectors(_a, p.pos);
       _vr.subVectors(p.vel, me.vel);
       const v2 = _vr.lengthSq();
@@ -227,7 +228,7 @@ export class AIController {
       return;
     }
     for (const b of w.projectiles.beams) {
-      if (b.active && b.owner === foe && Math.random() < this.tune.dodge * 0.08) {
+      if (b.active && b.owner.team !== me.team && Math.random() < this.tune.dodge * 0.08) {
         this.dodge = { t: this.tune.reaction, side: randSign(), jump: false };
         return;
       }

@@ -1,11 +1,12 @@
 import puppeteer from 'puppeteer-core';
-import { CHROME, url, openVersusHost } from './harness.mjs';
+import { CHROME, url, openVersusHost, relayNoise } from './harness.mjs';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const BASE = url();
 const launch = () => puppeteer.launch({ executablePath: CHROME, headless: true,
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-sandbox', '--mute-audio', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
 const [bh, bg] = [await launch(), await launch()];
 const errs = [];
+let relayErrs = 0;
 const mk = async (b, name) => {
   const p = await b.newPage();
   await p.setViewport({ width: 640, height: 360 });
@@ -18,7 +19,7 @@ const mk = async (b, name) => {
     window.RTCPeerConnection = class extends RPC { constructor(c) { super(c); this.addEventListener('datachannel', (e) => window.__dcs.push(e.channel)); } };
   });
   p.on('pageerror', (e) => errs.push(`[${name} pageerror] ${e.message}`));
-  p.on('console', (m) => { if (m.type() === 'error') errs.push(`[${name} console.error] ${m.text().slice(0, 200)}`); });
+  p.on('console', (m) => { if (m.type() !== 'error') return; if (relayNoise(m.text())) relayErrs++; else errs.push(`[${name} console.error] ${m.text().slice(0, 200)}`); });
   return p;
 };
 const press = async (p, k, hold = 60) => { await p.keyboard.down(k); await sleep(hold); await p.keyboard.up(k); };
@@ -79,5 +80,6 @@ await sleep(2500);
 const after = await host.evaluate(() => ({ clock: window.__vo.app.screen.netClock, phase: window.__vo.app.screen.phase, overlay: !!document.querySelector('.overlay.reconnect') }));
 const gs = await guest.evaluate(() => { const s = window.__vo.app.screen; const l = s.net; return { phase: s.phase, overlay: !!document.querySelector('.overlay.reconnect'), snaps: s.snaps.length, delayMs: Math.round((s.snaps.at(-1)?.ht - s.renderT) * 1000), rt: l.rt?.readyState ?? null, rtReady: l.rtReady }; });
 console.log(`           after resume host ${JSON.stringify(after)} (clock ${before.toFixed(1)} -> ${after.clock.toFixed(1)}) | guest ${JSON.stringify(gs)}`);
+if (relayErrs) console.log(`(${relayErrs} failed connections to public Nostr relays ignored: one is down, pairing used the others)`);
 console.log('--- errors ---\n' + (errs.join('\n') || 'none'));
 await bh.close(); await bg.close();

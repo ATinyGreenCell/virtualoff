@@ -8,8 +8,9 @@ import { ceremony } from '../core/testmode';
 import type { Flow } from '../flow';
 import { Mech } from '../game/mech';
 import { MechModel, makePose } from '../game/mechModel';
-import { FUJIN, JEBE, ROSTER, type MechSpec } from '../game/specs';
+import { FUJIN, JEBE, ROSTER, type MechSpec, type Palette } from '../game/specs';
 import { World } from '../game/world';
+import { IS_XBOX, XBOX_HINT } from '../core/platform';
 import { canvasTexture } from '../render/textures';
 
 const VIDEO_LABEL: Record<VideoMode, string> = { pixel: 'ARCADE PIXELS', crt: 'CRT SCANLINES', sharp: 'SHARP HD' };
@@ -64,6 +65,7 @@ export const CONTROLS_HTML = `
   <span>Quick boosts and flight spend EN — let it refill.</span>
   <span>Shots change while boosting or airborne.</span>
   <span>Big hits knock down — you're invincible while getting up.</span>
+  <span>Split screen: each player on their own controller — press A to join.</span>
 </div>`;
 
 // ------------------------------------------------------------------ title
@@ -119,6 +121,7 @@ export class TitleScreen implements Screen {
       </div>
       <div class="press-start blink">PRESS START</div>
       <div class="menu"></div>
+      ${IS_XBOX ? `<div class="xbox-hint">${XBOX_HINT}</div>` : ''}
       <div class="title-foot">unofficial fan tribute · not affiliated with SEGA · all mechs, stages & music are original</div>`;
     this.menuEl = this.el.querySelector('.menu') as HTMLDivElement;
     this.panel = document.createElement('div');
@@ -136,7 +139,8 @@ export class TitleScreen implements Screen {
 
     this.mainItems = [
       { label: () => 'ARCADE MODE', act: () => this.startGame() },
-      { label: () => 'VERSUS · 2 PLAYERS', act: () => this.startVersus() },
+      { label: () => 'SPLIT SCREEN · 2 PLAYERS', act: () => this.leaveFor(() => this.flow.local()) },
+      { label: () => 'VERSUS · 2 DEVICES', act: () => this.startVersus() },
       { label: () => 'SETTINGS', act: () => this.openPage('settings') },
       { label: () => 'HOW TO PLAY', act: () => this.togglePanel(true) },
     ];
@@ -217,7 +221,8 @@ export class TitleScreen implements Screen {
 
   private openPage(page: 'main' | 'settings') {
     audio.play(page === 'main' ? 'uiBack' : 'uiSelect');
-    this.sel = page === 'main' ? 2 : 0;
+    // back on the main page, the cursor lands on SETTINGS again
+    this.sel = page === 'main' ? 3 : 0;
     this.page = page;
     this.menuEl.classList.toggle('settings', page === 'settings');
     this.renderMenu();
@@ -252,19 +257,20 @@ export class TitleScreen implements Screen {
   }
 
   private startGame() {
-    if (this.leaving) return;
-    this.leaving = true;
-    audio.play('uiConfirmBig');
-    this.el.classList.add('leaving');
-    setTimeout(() => this.flow.select(), 450);
+    this.leaveFor(() => this.flow.select());
   }
 
   private startVersus() {
+    this.leaveFor(() => this.flow.versus());
+  }
+
+  /** Fade the title out, then move on. */
+  private leaveFor(next: () => void) {
     if (this.leaving) return;
     this.leaving = true;
     audio.play('uiConfirmBig');
     this.el.classList.add('leaving');
-    setTimeout(() => this.flow.versus(), 450);
+    setTimeout(next, 450);
   }
 
   private placeCamera() {
@@ -585,31 +591,37 @@ export class SelectScreen implements Screen {
 export class EndingScreen implements Screen {
   private readonly hangar: Hangar;
   private readonly el: HTMLDivElement;
-  private readonly model: MechModel;
+  private readonly models: MechModel[];
   private readonly pose = makePose();
   private readonly offResize: () => void;
   private t = 0;
   private leaving = false;
 
+  /** `pilots`: the arcade player, or both co-op players side by side. */
   constructor(
     private readonly app: App,
     private readonly flow: Flow,
-    spec: MechSpec,
+    pilots: { spec: MechSpec; palette: Palette }[],
   ) {
-    this.hangar = new Hangar(app.renderer.aspect);
+    const duo = pilots.length > 1;
+    this.hangar = new Hangar(app.renderer.aspect, duo ? [-7.5, 7.5] : [0]);
     this.offResize = app.renderer.onResize(() => {
       this.hangar.cam.aspect = app.renderer.aspect;
       this.hangar.cam.updateProjectionMatrix();
     });
-    this.model = new MechModel(spec, spec.palette);
-    this.model.root.position.y = 0.9;
-    this.hangar.platform.add(this.model.root);
+    this.models = pilots.map((p, i) => {
+      const model = new MechModel(p.spec, p.palette);
+      model.root.position.y = 0.9;
+      this.hangar.platforms[i].add(model.root);
+      return model;
+    });
+    const names = [...new Set(pilots.map((p) => p.spec.name))].join(' & ');
     this.el = document.createElement('div');
     this.el.className = 'screen ending-screen';
     this.el.innerHTML = `
-      <div class="end-kicker">LIMITED WAR · FINAL REPORT</div>
+      <div class="end-kicker">LIMITED WAR · FINAL REPORT${duo ? ' · CO-OP' : ''}</div>
       <div class="end-title">ALL STAGES CLEAR</div>
-      <div class="end-sub">CONGRATULATIONS, ${spec.name} PILOT</div>
+      <div class="end-sub">CONGRATULATIONS, ${names} ${duo ? 'PILOTS' : 'PILOT'}</div>
       <div class="end-credits">
         <div>VIRTUAL-OFF</div>
         <div>a love letter to mid-90s arcade mech duels</div>
@@ -632,11 +644,14 @@ export class EndingScreen implements Screen {
   update(dt: number) {
     this.t += dt;
     this.hangar.update(this.t);
-    this.model.root.rotation.y = this.t * 0.4;
     this.pose.aimR = Math.sin(this.t * 0.5) > 0.3 ? 1 : 0;
-    this.model.update(this.pose, dt);
+    this.models.forEach((m, i) => {
+      m.root.rotation.y = this.t * 0.4 + i * Math.PI;
+      m.update(this.pose, dt);
+    });
     const c = this.hangar.cam;
-    c.position.set(Math.sin(this.t * 0.15) * 4, 5, 19);
+    if (this.models.length > 1) c.position.set(Math.sin(this.t * 0.15) * 5, 7, 33);
+    else c.position.set(Math.sin(this.t * 0.15) * 4, 5, 19);
     c.lookAt(0, 4.4, 0);
     if (this.app.input.menu.confirm) this.leave();
   }
@@ -647,7 +662,7 @@ export class EndingScreen implements Screen {
 
   dispose() {
     this.offResize();
-    this.model.dispose();
+    for (const m of this.models) m.dispose();
     this.hangar.dispose();
     this.el.remove();
   }

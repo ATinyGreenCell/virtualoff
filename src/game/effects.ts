@@ -7,6 +7,10 @@ const _p = new THREE.Vector3();
 const _q = new THREE.Vector3();
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
+/** Pixels per world unit at distance 1, for sizing point particles in a view this tall. */
+const pointScale = (camera: THREE.PerspectiveCamera, viewportHeight: number) =>
+  viewportHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+
 /** A recorded effect call: name followed by its arguments (mirrored host -> guest in versus). */
 export type FxEvent = (string | number)[];
 
@@ -120,6 +124,10 @@ class ParticleLayer {
     this.maxLife[i] = life;
     this.drag[i] = drag;
     this.grav[i] = gravity;
+  }
+
+  setScale(scale: number) {
+    this.mat.uniforms.uScale.value = scale;
   }
 
   update(dt: number, scale: number) {
@@ -489,7 +497,7 @@ export class Effects {
   }
 
   update(dt: number, camera: THREE.PerspectiveCamera, viewportHeight: number) {
-    const scale = viewportHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+    const scale = pointScale(camera, viewportHeight);
     this.add.update(dt, scale);
     this.smokeLayer.update(dt, scale);
     this.step(this.sprites, dt, fadeLinear, growLinear);
@@ -523,6 +531,13 @@ export class Effects {
         d.mesh.scale.multiplyScalar(Math.max(0, 1 - dt * 4));
       }
     }
+  }
+
+  /** Split screen: size the point particles for the view about to be drawn. */
+  setView(camera: THREE.PerspectiveCamera, viewportHeight: number) {
+    const scale = pointScale(camera, viewportHeight);
+    this.add.setScale(scale);
+    this.smokeLayer.setScale(scale);
   }
 
   private step(pool: Timed[], dt: number, fade: (u: number) => number, grow: (u: number) => number) {

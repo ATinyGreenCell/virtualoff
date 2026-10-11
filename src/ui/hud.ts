@@ -19,10 +19,23 @@ interface Bar {
   last: number;
 }
 
-/** DOM overlay for the battle screen. */
+export interface HudOptions {
+  /** one of two stacked split-screen views: compact layout */
+  split?: boolean;
+  /** co-op: the partner's armor, shown small under your own */
+  ally?: { tag: string; spec: MechSpec };
+}
+
+/** DOM overlay for the battle screen (one per view in split screen). */
 export class HUD {
   readonly root: HTMLDivElement;
+  /** size of the view this HUD sits on, in CSS px (reticle and off-screen arrow placement) */
+  viewW = window.innerWidth;
+  viewH = window.innerHeight;
+  /** split screen: the whole HUD is scaled to its view's height (1 = laid out for a 540-px view) */
+  private zoom = 1;
   private bars: Bar[] = [];
+  private allyBar: { root: HTMLDivElement; fill: HTMLDivElement; last: number } | null = null;
   private timer: HTMLDivElement;
   private gauges = {} as Record<Slot, { root: HTMLDivElement; fill: HTMLDivElement; last: number; ready: boolean }>;
   private en: { root: HTMLDivElement; fill: HTMLDivElement; last: number; state: string };
@@ -39,8 +52,16 @@ export class HUD {
   private lastStatus = '';
   private lastRet = '';
 
-  constructor(parent: HTMLElement, p1: MechSpec, p2: MechSpec, stageName: string, round: number, tags: [string, string] = ['1P', 'CPU']) {
-    this.root = el('div', 'hud', parent);
+  constructor(
+    parent: HTMLElement,
+    p1: MechSpec,
+    p2: MechSpec,
+    stageName: string,
+    round: number,
+    tags: [string, string] = ['1P', 'CPU'],
+    opts: HudOptions = {},
+  ) {
+    this.root = el('div', opts.split ? 'hud split' : 'hud', parent);
     const top = el('div', 'hud-top', this.root);
     const mkBar = (spec: MechSpec, side: 'p1' | 'p2', tag: string) => {
       const root = el('div', `pl ${side}`, top);
@@ -59,6 +80,13 @@ export class HUD {
       this.bars.push({ fill, lag, num, pips, root, last: -1 });
     };
     mkBar(p1, 'p1', tags[0]);
+    if (opts.ally) {
+      const root = el('div', 'ally', this.bars[0].root);
+      el('span', 'ally-tag', root, opts.ally.tag);
+      el('span', 'ally-mech', root, opts.ally.spec.name);
+      const fill = el('div', 'ally-fill', el('div', 'ally-bar', root));
+      this.allyBar = { root, fill, last: -1 };
+    }
     const tbox = el('div', 'timer-box', top);
     el('div', 'timer-label', tbox, 'TIME');
     this.timer = el('div', 'timer', tbox, '60');
@@ -100,6 +128,16 @@ export class HUD {
       '<b>WASD</b> move · <b>Q/E</b> turn · <b>SPACE</b> jump, hold to climb · <b>SHIFT</b> tap quick boost, hold boost · <b>J</b> LW · <b>L</b> RW · <b>K</b> or <b>J+L</b> CW · <b>C</b> guard · <b>ESC</b> pause';
   }
 
+  /** Fit the HUD to a view of this size (split screen scales the layout with the view's height). */
+  setViewport(w: number, h: number, split: boolean) {
+    this.viewW = w;
+    this.viewH = h;
+    const z = split ? Math.min(1.2, Math.max(0.6, h / 540)) : 1;
+    if (z === this.zoom) return;
+    this.zoom = z;
+    this.root.style.zoom = z === 1 ? '' : z.toFixed(3);
+  }
+
   setRoundLabel(round: number) {
     const r = this.root.querySelector('.round-label');
     if (r) r.textContent = `ROUND ${round}`;
@@ -124,6 +162,19 @@ export class HUD {
     b.num.textContent = String(n).padStart(3, '0');
     b.root.classList.toggle('warn', pct < 0.5 && pct >= 0.25);
     b.root.classList.toggle('danger', pct < 0.25);
+  }
+
+  /** Co-op: the partner's armor (0 once they're down for the round). */
+  setAllyHP(frac: number) {
+    const a = this.allyBar;
+    if (!a) return;
+    const pct = Math.max(0, Math.min(1, frac));
+    const n = Math.ceil(pct * 100);
+    if (n === a.last) return;
+    a.last = n;
+    a.fill.style.transform = `scaleX(${pct})`;
+    a.root.classList.toggle('danger', pct < 0.25);
+    a.root.classList.toggle('out', n === 0);
   }
 
   setWins(wins: number[]) {
@@ -186,7 +237,8 @@ export class HUD {
     }
     if (this.lastRet === 'hidden') this.reticle.style.display = '';
     this.lastRet = 'shown';
-    this.reticle.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+    // a zoomed HUD lays out in its own (scaled) pixels
+    this.reticle.style.transform = `translate(${(x / this.zoom).toFixed(1)}px, ${(y / this.zoom).toFixed(1)}px)`;
     this.reticle.classList.toggle('locked', locked);
     const d = String(Math.min(999, Math.round(dist))).padStart(3, '0');
     if (this.retDist.textContent !== d) this.retDist.textContent = d;
@@ -198,8 +250,8 @@ export class HUD {
       this.arrow.style.display = 'none';
       return;
     }
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    const w = this.viewW / this.zoom;
+    const h = this.viewH / this.zoom;
     const rx = w * 0.42;
     const ry = h * 0.38;
     const x = w / 2 + Math.cos(angle) * rx;

@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer-core';
-import { CHROME, OUT, url, openVersusHost } from './harness.mjs';
+import { CHROME, OUT, url, openVersusHost, relayNoise } from './harness.mjs';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const launch = () => puppeteer.launch({ executablePath: CHROME, headless: true,
   args: ['--use-angle=swiftshader','--enable-unsafe-swiftshader','--ignore-gpu-blocklist','--no-sandbox','--mute-audio','--disable-background-timer-throttling','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows'] });
@@ -7,12 +7,13 @@ const browsers = [await launch(), await launch()];
 let bi = 0;
 const browser = { close: async () => { for (const b of browsers) await b.close(); } };
 const errs = [];
+let relayErrs = 0;
 const mk = async (name) => {
   const p = await browsers[bi++].newPage();
   await p.setViewport({ width: 640, height: 360 });
   await p.evaluateOnNewDocument(() => localStorage.setItem('virtualoff.settings.v1', JSON.stringify({ perf: 'low', voice: false })));
   p.on('pageerror', (e) => errs.push(`[${name} pageerror] ${e.message}\n${(e.stack || '').split('\n').slice(0, 3).join('\n')}`));
-  p.on('console', (m) => { if (m.type() === 'error') errs.push(`[${name} console.error] ${m.text().slice(0, 200)}`); });
+  p.on('console', (m) => { if (m.type() !== 'error') return; if (relayNoise(m.text())) relayErrs++; else errs.push(`[${name} console.error] ${m.text().slice(0, 200)}`); });
   return p;
 };
 const press = async (p, k, hold = 60) => { await p.keyboard.down(k); await sleep(hold); await p.keyboard.up(k); };
@@ -83,5 +84,6 @@ const gTitle = await waitFor(async () => (await scr(guest)).screen === 'TitleScr
 const gLink = await guest.evaluate(() => window.__vo.flow?.link ?? null);
 console.log('host notified of leave:', JSON.stringify(left), '| guest reached title:', !!gTitle, gTitle ? `${Date.now() - tl} ms after the host saw it` : JSON.stringify(await scr(guest)));
 await host.screenshot({ path: `${OUT}/vs-host-rivalleft.png` });
+if (relayErrs) console.log(`(${relayErrs} failed connections to public Nostr relays ignored: one is down, pairing used the others)`);
 console.log('--- errors ---'); console.log(errs.join('\n') || 'none');
 await browser.close();

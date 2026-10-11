@@ -420,7 +420,7 @@ export class Projectiles {
       // mech collision
       let hitMech: Mech | null = null;
       for (const m of w.mechs) {
-        if (m === p.owner || !m.alive || !m.hittable) continue;
+        if (m.team === p.owner.team || !m.alive || !m.hittable) continue;
         m.axis(_b, _c);
         const r = m.spec.radius * 0.85 + p.radius;
         if (segSegDist2(p.prev, p.pos, _b, _c) < r * r) {
@@ -445,7 +445,7 @@ export class Projectiles {
       if (!a.alive) continue;
       for (let j = i + 1; j < this.list.length; j++) {
         const b = this.list[j];
-        if (!b.alive || b.owner === a.owner) continue;
+        if (!b.alive || b.owner.team === a.owner.team) continue;
         const r = a.radius + b.radius;
         if (a.pos.distanceToSquared(b.pos) > r * r) continue;
         w.fx.flash(_d.addVectors(a.pos, b.pos).multiplyScalar(0.5), 0xffffff, 4, 0.15, true);
@@ -510,7 +510,7 @@ export class Projectiles {
       w.sound(p.kind === 'hyper' ? 'explosionBig' : 'explosionSmall', pos);
       w.shake(p.kind === 'hyper' ? 0.6 : 0.35, pos);
       for (const m of w.mechs) {
-        if (m === p.owner || !m.alive || !m.hittable) continue;
+        if (m.team === p.owner.team || !m.alive || !m.hittable) continue;
         m.axis(_b, _c);
         // distance from blast center to the mech's axis
         const seg = _d.subVectors(_c, _b);
@@ -675,19 +675,21 @@ export class Beam {
     this.end.copy(this.origin).addScaledVector(this.dir, this.length);
 
     this.tick -= dt;
-    if (tgt.alive && tgt.hittable) {
-      tgt.axis(_b, _c);
-      const r = this.width * 0.55 + tgt.spec.radius * 0.8;
-      if (segSegDist2(this.origin, this.end, _b, _c) < r * r) {
-        if (this.tick <= 0) {
-          this.tick = 0.1;
-          const dir = new THREE.Vector3(this.dir.x, 0, this.dir.z).normalize();
-          tgt.centerInto(_a);
-          tgt.takeHit({ damage: this.dps * 0.1, knock: 'stagger', dir, source: m, pos: _a.clone() }, w);
-          w.fx.spray(_a, _d.copy(this.dir).negate(), 6, 0xffe0a0, 30);
-        }
-      }
+    if (this.tick > 0) return;
+    // the beam burns every enemy in its path (co-op: both players can be caught in one sweep)
+    let hit = false;
+    for (const e of w.mechs) {
+      if (e.team === m.team || !e.alive || !e.hittable) continue;
+      e.axis(_b, _c);
+      const r = this.width * 0.55 + e.spec.radius * 0.8;
+      if (segSegDist2(this.origin, this.end, _b, _c) >= r * r) continue;
+      hit = true;
+      const dir = new THREE.Vector3(this.dir.x, 0, this.dir.z).normalize();
+      e.centerInto(_a);
+      e.takeHit({ damage: this.dps * 0.1, knock: 'stagger', dir, source: m, pos: _a.clone() }, w);
+      w.fx.spray(_a, _d.copy(this.dir).negate(), 6, 0xffe0a0, 30);
     }
+    if (hit) this.tick = 0.1;
   }
 
   /** Cosmetic side: geometry, flares, sparks, rumble and the looping roar. */

@@ -176,3 +176,30 @@ export const FUJIN: MechSpec = {
 };
 
 export const ROSTER: MechSpec[] = [JEBE, FUJIN];
+
+/**
+ * Co-op bosses wear an ace's black with gold or crimson, so they never match either player (who may
+ * both pick the boss's VR), and fire red/orange so their shots read apart from the players'.
+ */
+export const BOSS_PALETTES: Record<MechId, Palette> = {
+  jebe: {
+    primary: 0x2a2c34,
+    secondary: 0xd4a21a,
+    accent: 0xff4a2a,
+    joint: 0x121318,
+    trim: 0xd4a21a,
+    eye: 0xff3030,
+    flame: 0xffa040,
+    beam: 0xff3a2a,
+  },
+  fujin: {
+    primary: 0x2c2a2e,
+    secondary: 0xb3122e,
+    accent: 0xffd21a,
+    joint: 0x141214,
+    trim: 0xffd21a,
+    eye: 0xffe040,
+    flame: 0xffc050,
+    beam: 0xff8a1a,
+  },
+};

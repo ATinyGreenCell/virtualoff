@@ -30,6 +30,9 @@ const TESTS = [
   { name: 'movement', file: 'movement.mjs', est: 20, pass: (o) => /boostSteady\s+41\b/.test(o) && /errors: none/.test(o) },
   { name: 'move-edges', file: 'movement-edges.mjs', est: 20, pass: (o) => /edges OK/.test(o) && noErrors(o) },
   { name: 'touch', file: 'touch.mjs', est: 30, pass: (o) => /touch OK/.test(o) && noErrors(o) },
+  { name: 'split-vs', file: 'local.mjs', args: ['versus'], est: 75, pass: (o) => /local OK/.test(o) && noErrors(o) },
+  { name: 'split-coop', file: 'local.mjs', args: ['coop'], est: 40, pass: (o) => /local OK/.test(o) && noErrors(o) },
+  { name: 'split-edge', file: 'local.mjs', args: ['edges'], est: 70, pass: (o) => /local OK/.test(o) && noErrors(o) },
 ].filter((t) => !only || only.includes(t.name));
 
 async function startServer() {
